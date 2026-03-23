@@ -110,7 +110,6 @@ class SpeechToTextService:
             return f"STT Error: {str(e)}"
 
 
-# Singleton
 stt_service = SpeechToTextService()
 
 

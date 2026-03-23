@@ -54,7 +54,6 @@ class TextToSpeechService:
             return None
 
 
-# Singleton
 tts_service = TextToSpeechService()
 
 
