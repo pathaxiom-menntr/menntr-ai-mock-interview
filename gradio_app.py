@@ -262,12 +262,16 @@ async def process_resume(resume_file):
 
 async def start_interview(skills: list, session_state: dict):
     """Generate the first question directly via LLM (no LangGraph ainvoke)."""
+    print(f"DEBUG: start_interview called with skills: {skills}")
+    sys.stdout.flush()
     resolved_skills = skills if skills else ["General"]
 
     try:
         question_text = await _generate_question(resolved_skills, [])
         if not question_text:
-            return session_state, "❌ Could not generate a question. Check your Azure OpenAI credentials.", None, "1/5", "<span class='status-pill status-idle'>Error</span>"
+            print("DEBUG: start_interview failed to generate question")
+            sys.stdout.flush()
+            return session_state, "❌ Could not generate a question. Check your Azure OpenAI credentials.", None, "1/5", "<span class='status-pill status-idle'>Error</span>", gr.Tabs(selected=0)
 
         audio_path = tts_service.speak_text(question_text)
 
@@ -277,18 +281,21 @@ async def start_interview(skills: list, session_state: dict):
         new_state["current_question"] = q
         new_state["questions"] = [q]
 
-        # Resilience delay for Windows socket flushing
-        await asyncio.sleep(0.1)
+        print(f"DEBUG: start_interview successful, returning question and tab switch to 'interview'")
+        sys.stdout.flush()
         return (
             new_state,
             question_text,
             audio_path,
             "Question 1 / 5",
             "<span class='status-pill status-listening'>🎙 Listening…</span>",
+            gr.Tabs(selected=1),
         )
     except Exception as e:
+        print(f"DEBUG: start_interview ERROR: {e}")
         import traceback; traceback.print_exc()
-        return session_state, f"❌ Error: {str(e)}", None, "1/5", "<span class='status-pill status-idle'>Error</span>"
+        sys.stdout.flush()
+        return session_state, f"❌ Error: {str(e)}", None, "1/5", "<span class='status-pill status-idle'>Error</span>", gr.Tabs(selected=0)
 
 
 async def submit_answer(audio_input, session_state: dict):
@@ -300,7 +307,7 @@ async def submit_answer(audio_input, session_state: dict):
     if audio_input is None:
         print("DEBUG: audio_input is None - NO AUDIO RECEIVED")
         sys.stdout.flush()
-        return session_state, "⚠️ No audio recorded.", "Please record an answer.", None, None, "–", "<span class='status-pill status-idle'>Waiting…</span>", False
+        return session_state, "⚠️ No audio recorded.", "Please record an answer.", None, None, "–", "<span class='status-pill status-idle'>Waiting…</span>", False, gr.Tabs()
 
     # Check file existence if it's a string path
     if isinstance(audio_input, str):
@@ -312,7 +319,7 @@ async def submit_answer(audio_input, session_state: dict):
         sys.stdout.flush()
         
         if not os.path.exists(audio_input):
-            return session_state, "❌ Audio file not found on server.", "", None, "–", "<span class='status-pill status-idle'>File Error</span>", False
+            return session_state, "❌ Audio file not found on server.", "", None, "–", "<span class='status-pill status-idle'>File Error</span>", False, gr.Tabs()
     elif isinstance(audio_input, dict):
         print(f"DEBUG: audio_input is a DICT: {audio_input.keys()}")
         sys.stdout.flush()
@@ -323,7 +330,7 @@ async def submit_answer(audio_input, session_state: dict):
             sys.stdout.flush()
             audio_input = path
         else:
-            return session_state, "❌ Unexpected audio data format.", "", None, "–", "<span class='status-pill status-idle'>Format Error</span>", False
+            return session_state, "❌ Unexpected audio data format.", "", None, "–", "<span class='status-pill status-idle'>Format Error</span>", False, gr.Tabs()
 
     # ── Step 1: STT ──
     print("DEBUG: Starting transcription...")
@@ -333,13 +340,13 @@ async def submit_answer(audio_input, session_state: dict):
     sys.stdout.flush()
 
     if not transcript or transcript.startswith("STT Error") or "Could not understand" in transcript:
-        return session_state, transcript, "❗ Could not understand audio. Please speak clearly and try again.", None, None, "–", "<span class='status-pill status-listening'>🎙 Try Again</span>", False
+        return session_state, transcript, "❗ Could not understand audio. Please speak clearly and try again.", None, None, "–", "<span class='status-pill status-listening'>🎙 Try Again</span>", False, gr.Tabs()
 
     # ── Step 2: Evaluate + next question ──
     state = dict(session_state)
     q = state.get("current_question")
     if not q:
-        return session_state, transcript, "No active question found. Please start the interview first.", None, None, "–", "<span class='status-pill status-idle'>Idle</span>", False
+        return session_state, transcript, "No active question found. Please start the interview first.", None, None, "–", "<span class='status-pill status-idle'>Idle</span>", False, gr.Tabs()
 
     try:
         from app.ai.mcp_server import evaluate_answer as mcp_evaluate
@@ -368,8 +375,8 @@ async def submit_answer(audio_input, session_state: dict):
             state["total_score"] = sum(a["score"] for a in answers) / len(answers)
             state["is_finished"] = True
             answer_count = len(answers)
-            # Resilience delay
-            await asyncio.sleep(0.1)
+            print("DEBUG: submit_answer FINISHED, switching to 'report' tab")
+            sys.stdout.flush()
             return (
                 state,
                 transcript,
@@ -379,6 +386,7 @@ async def submit_answer(audio_input, session_state: dict):
                 f"Done — {answer_count}/5 answers",
                 "<span class='status-pill status-idle'>Interview Complete 🎉</span>",
                 True,
+                gr.Tabs(selected=2),
             )
 
         # Generate next question
@@ -405,10 +413,13 @@ async def submit_answer(audio_input, session_state: dict):
             progress,
             "<span class='status-pill status-listening'>🎙 Listening…</span>",
             False,
+            gr.update(),
         )
     except Exception as e:
+        print(f"DEBUG: submit_answer ERROR: {e}")
         import traceback; traceback.print_exc()
-        return session_state, f"Error: {e}", str(e), gr.update(), None, "–", "<span class='status-pill status-idle'>Error</span>", False
+        sys.stdout.flush()
+        return session_state, f"Error: {e}", str(e), gr.update(), None, "–", "<span class='status-pill status-idle'>Error</span>", False, gr.Tabs()
 
 
 async def build_report(session_state: dict):
@@ -460,7 +471,7 @@ with gr.Blocks(css=CUSTOM_CSS, title="AI Mock Interview") as demo:
         # ══════════════════════════════════════════════
         #  TAB 1 — Setup
         # ══════════════════════════════════════════════
-        with gr.TabItem("📋 Setup", id="setup"):
+        with gr.TabItem("📋 Setup", id=0):
             with gr.Row():
                 with gr.Column(scale=1):
                     gr.HTML("""
@@ -499,7 +510,7 @@ with gr.Blocks(css=CUSTOM_CSS, title="AI Mock Interview") as demo:
         # ══════════════════════════════════════════════
         #  TAB 2 — Interview Room
         # ══════════════════════════════════════════════
-        with gr.TabItem("🎙 Interview", id="interview"):
+        with gr.TabItem("🎙 Interview", id=1):
             with gr.Row():
                 # Left: AI avatar + question
                 with gr.Column(scale=1):
@@ -556,7 +567,7 @@ with gr.Blocks(css=CUSTOM_CSS, title="AI Mock Interview") as demo:
         # ══════════════════════════════════════════════
         #  TAB 3 — Report Card
         # ══════════════════════════════════════════════
-        with gr.TabItem("📊 Report Card", id="report"):
+        with gr.TabItem("📊 Report Card", id=2):
             gr.HTML("""
             <div class="glass-card" style="text-align:center;">
                 <h2 style="color:#a78bfa;margin-bottom:0.5rem;">Interview Complete</h2>
@@ -590,14 +601,14 @@ with gr.Blocks(css=CUSTOM_CSS, title="AI Mock Interview") as demo:
     start_btn.click(
         fn=start_interview,
         inputs=[extracted_skills, session_state],
-        outputs=[session_state, question_box, ai_audio_out, progress_lbl, status_html],
+        outputs=[session_state, question_box, ai_audio_out, progress_lbl, status_html, tabs],
     )
 
     # 3. Submit answer
     submit_btn.click(
         fn=submit_answer,
         inputs=[mic_input, session_state],
-        outputs=[session_state, transcript_box, feedback_box, question_box, ai_audio_out, progress_lbl, status_html, switch_tab],
+        outputs=[session_state, transcript_box, feedback_box, question_box, ai_audio_out, progress_lbl, status_html, switch_tab, tabs],
     )
 
     # Automatically clear the transcript box when the user starts a new recording or uploads a new file
@@ -622,13 +633,15 @@ with gr.Blocks(css=CUSTOM_CSS, title="AI Mock Interview") as demo:
 
     # 5. Retry
     def _reset():
+        print("DEBUG: _reset called, switching to 'setup' tab")
+        sys.stdout.flush()
         fresh = make_fresh_state()
-        return fresh, [], "", "", None, "—", "<span class='status-pill status-idle'>Idle</span>", "*Complete the interview to see your report.*", []
+        return fresh, [], "", "", None, "—", "<span class='status-pill status-idle'>Idle</span>", "*Complete the interview to see your report.*", [], gr.Tabs(selected=0)
 
     retry_btn.click(
         fn=_reset,
         inputs=[],
-        outputs=[session_state, extracted_skills, question_box, transcript_box, ai_audio_out, progress_lbl, status_html, report_summary, report_table],
+        outputs=[session_state, extracted_skills, question_box, transcript_box, ai_audio_out, progress_lbl, status_html, report_summary, report_table, tabs],
     )
 
 

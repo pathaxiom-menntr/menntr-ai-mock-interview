@@ -87,9 +87,17 @@ async def skill_extractor(state: InterviewState) -> Dict[str, Any]:
 async def generate_question(state: InterviewState) -> Dict[str, Any]:
     print("--- GENERATING QUESTION ---")
 
+    from app.services.interviewer import INTERVIEWER_SYSTEM_PROMPT
     messages = [
-        {"role": "system", "content": "You are an expert technical interviewer."},
-        {"role": "user", "content": f"Skills: {state.get('skills')}\nPrevious Questions: {state.get('questions')}"}
+        {"role": "system", "content": INTERVIEWER_SYSTEM_PROMPT + f"\nDifficulty level: {state.get('difficulty', 'Easy')}"},
+        {"role": "user", "content": (
+            f"Skills: {state.get('skills')}\n"
+            f"Conversation History: {state.get('conversation_history')}\n"
+            f"Current Question: {state.get('current_question')}\n"
+            f"User's Last Answer: {state.get('last_user_input')}\n\n"
+            "If the candidate's last answer was too short or lacked technical depth, ASK A CLARIFYING FOLLOW-UP first. "
+            "Otherwise, acknowledge their points and ask the NEXT focused question."
+        )}
     ]
 
     response = await llm_client.get_completion(
@@ -113,7 +121,7 @@ async def generate_question(state: InterviewState) -> Dict[str, Any]:
         "id": str(len(state.get("questions", [])) + 1),
         "text": msg.content,
         "skill": "General",
-        "difficulty": "Medium"
+        "difficulty": state.get("difficulty", "Easy")
     }
 
     return {
@@ -287,4 +295,4 @@ workflow.add_conditional_edges(
 )
 app_graph = workflow.compile()
 # Config for app_graph can be set during invocation or here optionally
-# config = {"recursion_limit": 50}
+# config = {"recursion_limit": 50}

@@ -34,10 +34,21 @@ class TextToSpeechService:
             import azure.cognitiveservices.speech as speechsdk
             speech_config = self._get_config()
 
-            # Write to a temp file so Gradio can serve it
-            tmp = tempfile.NamedTemporaryFile(suffix=".wav", delete=False)
-            output_file = tmp.name
-            tmp.close()
+            # Resolve correct output directory:
+            # FastAPI mounts backend/static/ at /static, so save there.
+            # Walk up from this file (__file__ = app/services/text_to_speech.py)
+            # to find the project root, then target backend/static/audio/.
+            this_file = os.path.abspath(__file__)
+            project_root = os.path.dirname(os.path.dirname(os.path.dirname(this_file)))
+            backend_audio_dir = os.path.join(project_root, "backend", "static", "audio")
+            
+            # Prefer backend/static/audio, fall back to app/static/audio
+            audio_dir = backend_audio_dir if os.path.isabs(backend_audio_dir) else os.path.join("backend", "static", "audio")
+            os.makedirs(audio_dir, exist_ok=True)
+            
+            import time
+            filename = f"speech_{int(time.time() * 1000)}.wav"
+            output_file = os.path.abspath(os.path.join(audio_dir, filename))
 
             audio_config = speechsdk.audio.AudioOutputConfig(filename=output_file)
             synthesizer = speechsdk.SpeechSynthesizer(
@@ -47,6 +58,12 @@ class TextToSpeechService:
             result = synthesizer.speak_text_async(text).get()
 
             if result.reason == speechsdk.ResultReason.SynthesizingAudioCompleted:
+                if os.path.exists(output_file):
+                    size = os.path.getsize(output_file)
+                    print(f"DEBUG: TTS generated file: {output_file} (Size: {size} bytes)")
+                else:
+                    print(f"DEBUG: TTS failed to generate file: {output_file}")
+                
                 return output_file
             return None
         except Exception as e:
