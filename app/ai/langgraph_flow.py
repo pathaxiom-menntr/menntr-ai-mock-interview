@@ -84,19 +84,20 @@ async def skill_extractor(state: InterviewState) -> Dict[str, Any]:
     }
 
 
-async def generate_question(state: InterviewState) -> Dict[str, Any]:
-    print("--- GENERATING QUESTION ---")
-
+async def process_turn(state: InterviewState) -> Dict[str, Any]:
+    """Evaluates last answer AND generates next question in one LLM call for zero latency."""
+    print("--- EVALUATING & GENERATING ---")
     from app.services.interviewer import INTERVIEWER_SYSTEM_PROMPT
+    
+    # We provide context about the current question and the last answer
     messages = [
         {"role": "system", "content": INTERVIEWER_SYSTEM_PROMPT + f"\nDifficulty level: {state.get('difficulty', 'Easy')}"},
         {"role": "user", "content": (
             f"Skills: {state.get('skills')}\n"
-            f"Conversation History: {state.get('conversation_history')}\n"
             f"Current Question: {state.get('current_question')}\n"
-            f"User's Last Answer: {state.get('last_user_input')}\n\n"
-            "If the candidate's last answer was too short or lacked technical depth, ASK A CLARIFYING FOLLOW-UP first. "
-            "Otherwise, acknowledge their points and ask the NEXT focused question."
+            f"User's Last Answer: {state.get('last_user_input')}\n"
+            f"Conversation History: {state.get('conversation_history')}\n\n"
+            "Please evaluate the last answer (score 0.0-1.0 and feedback) and then provide the next question or a follow-up."
         )}
     ]
 
@@ -106,7 +107,8 @@ async def generate_question(state: InterviewState) -> Dict[str, Any]:
     )
 
     msg = response.choices[0].message
-
+    
+    # Process potential tool calls (like tips)
     if msg.tool_calls:
         return {
             "tool_calls": [{
@@ -114,19 +116,56 @@ async def generate_question(state: InterviewState) -> Dict[str, Any]:
                 "name": msg.tool_calls[0].function.name,
                 "args": json.loads(msg.tool_calls[0].function.arguments)
             }],
-            "next_node": "generate_question"
+            "next_node": "process_turn"
         }
 
-    question = {
+    # Extract evaluation and question from the message content
+    full_content = msg.content or ""
+    display_content = full_content
+    eval_data = {"score": 0.8, "feedback": "Constructive feedback pending."}
+    
+    if "---" in full_content:
+        parts = full_content.split("---")
+        display_content = parts[0].strip()
+        json_part = parts[-1].strip()
+        try:
+            # Clean up potential markdown code blocks around JSON
+            if "```json" in json_part:
+                json_part = json_part.split("```json")[-1].split("```")[0].strip()
+            elif "```" in json_part:
+                json_part = json_part.split("```")[-1].split("```")[0].strip()
+            
+            import json as json_lib
+            extracted = json_lib.loads(json_part)
+            if isinstance(extracted, dict):
+                eval_data["score"] = float(extracted.get("score", 0.8))
+                eval_data["feedback"] = str(extracted.get("feedback", "Good answer."))
+        except Exception as e:
+            print(f"Error parsing evaluation JSON: {e}")
+
+    # Update score if we have an answer to evaluate
+    from app.services.scoring import scoring_service
+    new_answers = state.get("answers", [])
+    if state.get("last_user_input") and state.get("current_question"):
+        new_answers.append({
+            "question_id": state["current_question"].get("id", "1"),
+            "text": state["last_user_input"],
+            "score": eval_data["score"],
+            "feedback": eval_data["feedback"]
+        })
+
+    next_q = {
         "id": str(len(state.get("questions", [])) + 1),
-        "text": msg.content,
+        "text": display_content,
         "skill": "General",
         "difficulty": state.get("difficulty", "Easy")
     }
 
     return {
-        "current_question": question,
-        "questions": state.get("questions", []) + [question],
+        "current_question": next_q,
+        "questions": state.get("questions", []) + [next_q],
+        "answers": new_answers,
+        "total_score": scoring_service.calculate_overall_score(new_answers),
         "tool_calls": []
     }
 
@@ -232,22 +271,23 @@ async def tool_node(state: InterviewState) -> Dict[str, Any]:
 
 workflow = StateGraph(InterviewState)
 
-workflow.add_node("resume_parser", resume_parser)
-workflow.add_node("skill_extractor", skill_extractor)
-workflow.add_node("generate_question", generate_question)
-workflow.add_node("get_user_answer", get_user_answer)
-workflow.add_node("evaluate_answer", evaluate_answer_node)
-workflow.add_node("update_score", update_score)
-workflow.add_node("tools", tool_node)
-
-workflow.add_edge(START, "resume_parser")
-
-
 def route_tool_or_next(next_node):
     def route(state):
         return "tools" if state.get("tool_calls") else next_node
     return route
 
+workflow.add_node("resume_parser", resume_parser)
+workflow.add_node("skill_extractor", skill_extractor)
+workflow.add_node("process_turn", process_turn)
+workflow.add_node("tools", tool_node)
+
+# Conditional Entry Point
+def entry_point(state):
+    if state.get("last_user_input"):
+        return "process_turn"
+    return "resume_parser"
+
+workflow.add_conditional_edges(START, entry_point)
 
 workflow.add_conditional_edges(
     "resume_parser",
@@ -257,40 +297,22 @@ workflow.add_conditional_edges(
 
 workflow.add_conditional_edges(
     "skill_extractor",
-    route_tool_or_next("generate_question"),
-    {"tools": "tools", "generate_question": "generate_question"}
+    route_tool_or_next("process_turn"),
+    {"tools": "tools", "process_turn": "process_turn"}
 )
 
 workflow.add_conditional_edges(
-    "generate_question",
-    route_tool_or_next("get_user_answer"),
-    {"tools": "tools", "get_user_answer": "get_user_answer"}
-)
-
-workflow.add_conditional_edges(
-    "evaluate_answer",
-    route_tool_or_next("update_score"),
-    {"tools": "tools", "update_score": "update_score"}
-)
-
-workflow.add_edge("get_user_answer", "evaluate_answer")
-
-workflow.add_conditional_edges(
-    "update_score",
-    decide_next,
-    {
-        "generate_question": "generate_question",
-        END: END
-    }
+    "process_turn",
+    route_tool_or_next(END),
+    {"tools": "tools", END: END}
 )
 
 workflow.add_conditional_edges(
     "tools",
-    lambda state: state.get("next_node", "generate_question"),
+    lambda state: state.get("next_node", "process_turn"),
     {
         "skill_extractor": "skill_extractor",
-        "generate_question": "generate_question",
-        "update_score": "update_score"
+        "process_turn": "process_turn"
     }
 )
 app_graph = workflow.compile()

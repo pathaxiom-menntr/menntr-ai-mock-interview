@@ -9,18 +9,56 @@ Speech-in / Speech-out interview platform powered by:
 import os
 import asyncio
 import sys
+import time
+
+# Disable Gradio's SSRF protection for local backend connections
+os.environ.setdefault("SAFEHTTPX_DISABLE", "1")
 import tempfile
 import json
+import numpy as np
 from pathlib import Path
+from typing import Dict, Any, List, Optional, Tuple, AsyncGenerator
 
 # ─── Windows Connection Fatigue Fix ──────────────────────────────────────────
 if sys.platform == "win32":
+    import logging
+    # Silence the noisy 'Exception in callback _ProactorBasePipeTransport' errors.
+    # The log record MESSAGE is: "Exception in callback _ProactorBasePipeTransport._call_connection_lost(None)"
+    # The "10054" only appears in the traceback — not the message — so we must match on the transport name.
+    class WinErrorFilter(logging.Filter):
+        _SUPPRESS = (
+            "10054", "forcibly closed", "ConnectionResetError",
+            "_ProactorBasePipeTransport", "_call_connection_lost",
+        )
+
+        def filter(self, record):
+            msg = record.getMessage()
+            if any(p in msg for p in self._SUPPRESS):
+                return False
+            # Also check exception info (covers tracebacks logged as part of the record)
+            if record.exc_info and record.exc_info[1]:
+                exc_str = str(record.exc_info[1])
+                if any(p in exc_str for p in ("10054", "ConnectionResetError", "forcibly closed")):
+                    return False
+            return True
+
+    # Apply to the asyncio logger (where these errors originate) and other noisy loggers
+    for logger_name in ["asyncio", "uvicorn.error", "gradio", "h11", ""]:  # "" = root logger
+        logging.getLogger(logger_name).addFilter(WinErrorFilter())
+
     def silent_exception_handler(loop, context):
         msg = context.get("message")
         exception = context.get("exception")
-        if "WinError 10054" in str(msg) or "WinError 10054" in str(exception) or isinstance(exception, ConnectionResetError):
+        exc_str = str(exception) if exception else ""
+        msg_str = str(msg) if msg else ""
+        
+        # Comprehensive check for ConnectionResetError-related strings
+        err_keywords = ["WinError 10054", "ConnectionResetError", "forcibly closed", "10054"]
+        if any(err in msg_str or err in exc_str for err in err_keywords):
             return
+            
         loop.default_exception_handler(context)
+    
     try:
         loop = asyncio.get_event_loop()
         loop.set_exception_handler(silent_exception_handler)
@@ -32,159 +70,182 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-# ─── Lazy imports (avoid crash when .env not yet filled) ──────────────────────
+# ─── Ensure FFmpeg for Windows ─────────────────────────────────────────────
+if sys.platform == "win32":
+    try:
+        from static_ffmpeg import add_paths
+        add_paths()
+        venv_path = os.path.join(os.getcwd(), "venv", "Scripts")
+        if os.path.exists(venv_path) and venv_path not in os.environ["PATH"]:
+            os.environ["PATH"] = venv_path + os.pathsep + os.environ["PATH"]
+        print("✅ FFmpeg paths successfully added")
+    except ImportError:
+        print("⚠️ static-ffmpeg not found, please run: venv\\Scripts\\pip install static-ffmpeg")
+
+# ─── Local Services ──────────────────────────────────────────────────────────
+from app.services.streaming_stt import streaming_stt_service
 from app.services.resume_parser import resume_parser_service
-from app.services.speech_to_text import stt_service
 from app.services.text_to_speech import tts_service
 from app.ai.langgraph_flow import app_graph
+from app.ai.mcp_server import extract_skills
+import base64
 
-# ─── Custom CSS ───────────────────────────────────────────────────────────────
+async def _get_audio_b64(text: str) -> str:
+    """Helper to generate TTS audio and return as base64 for JS playback."""
+    if not text:
+        return ""
+    try:
+        audio_path = tts_service.speak_text(text)
+        if audio_path and os.path.exists(audio_path):
+            with open(audio_path, "rb") as f:
+                return base64.b64encode(f.read()).decode("utf-8")
+    except Exception as e:
+        print(f"Error generating/encoding audio: {e}")
+    return ""
+
+# ─── Custom CSS & JS ──────────────────────────────────────────────────────────
 CUSTOM_CSS = """
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
-
-* { box-sizing: border-box; margin: 0; padding: 0; }
-
-body, .gradio-container {
-    font-family: 'Inter', sans-serif !important;
-    background: #07071a !important;
-    color: #e2e8f0 !important;
-    min-height: 100vh;
-}
-
-/* ── Header ── */
-.header-block {
-    background: linear-gradient(135deg, #1a0d3d 0%, #0d1a3d 100%);
-    border-bottom: 1px solid rgba(124,58,237,0.35);
-    padding: 1.5rem 2rem;
-    text-align: center;
-}
-.header-block h1 {
-    font-size: 2rem;
-    font-weight: 700;
-    background: linear-gradient(90deg, #a78bfa, #60a5fa);
-    -webkit-background-clip: text;
-    -webkit-text-fill-color: transparent;
-    letter-spacing: -0.5px;
-}
-.header-block p {
-    color: #94a3b8;
-    font-size: 0.9rem;
-    margin-top: 0.3rem;
-}
-
-/* ── Glass cards ── */
+/* ── Premium High-Interaction Layout ── */
 .glass-card {
-    background: rgba(255,255,255,0.04) !important;
-    border: 1px solid rgba(255,255,255,0.10) !important;
+    background: rgba(255, 255, 255, 0.03) !important;
+    border: 1px solid rgba(255, 255, 255, 0.1) !important;
     border-radius: 16px !important;
-    backdrop-filter: blur(12px);
-    padding: 1.5rem;
-    margin-bottom: 1rem;
+    padding: 1rem !important;
+    backdrop-filter: blur(10px);
 }
-
-/* ── Gradio component overrides ── */
-.gr-button {
-    border-radius: 10px !important;
-    font-weight: 600 !important;
-    transition: all 0.2s ease !important;
-}
-.primary-btn {
-    background: linear-gradient(135deg, #7c3aed, #2563eb) !important;
-    border: none !important;
-    color: #fff !important;
-    padding: 0.7rem 1.8rem !important;
-}
-.primary-btn:hover {
-    transform: translateY(-2px);
-    box-shadow: 0 8px 20px rgba(124,58,237,0.4) !important;
-}
-.secondary-btn {
-    background: rgba(255,255,255,0.06) !important;
-    border: 1px solid rgba(255,255,255,0.15) !important;
-    color: #cbd5e1 !important;
-}
-
-/* ── Avatar pulsing ring ── */
-.avatar-wrap {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    gap: 1rem;
-}
-.avatar-ring {
-    width: 96px; height: 96px;
-    border-radius: 50%;
-    background: linear-gradient(135deg, #7c3aed, #2563eb);
-    display: flex; align-items: center; justify-content: center;
-    font-size: 2.5rem;
-    box-shadow: 0 0 0 0 rgba(124,58,237,0.7);
-    animation: pulse-ring 2.5s infinite;
-}
-@keyframes pulse-ring {
-    0%   { box-shadow: 0 0 0 0   rgba(124,58,237,0.7); }
-    70%  { box-shadow: 0 0 0 18px rgba(124,58,237,0.0); }
-    100% { box-shadow: 0 0 0 0   rgba(124,58,237,0.0); }
-}
-.avatar-ring.idle {
-    animation: none;
-    box-shadow: 0 0 0 4px rgba(124,58,237,0.3);
-}
-
-/* ── Status pill ── */
-.status-pill {
-    display: inline-block;
-    padding: 0.25rem 0.9rem;
-    border-radius: 999px;
-    font-size: 0.78rem;
-    font-weight: 600;
-    letter-spacing: 0.03em;
-}
-.status-thinking { background: rgba(250,204,21,0.15); color: #fbbf24; border: 1px solid rgba(250,204,21,0.3); }
-.status-listening { background: rgba(34,197,94,0.15); color: #4ade80; border: 1px solid rgba(34,197,94,0.3); }
-.status-idle { background: rgba(148,163,184,0.1); color: #94a3b8; border: 1px solid rgba(148,163,184,0.2); }
-
-/* ── Score badge ── */
-.score-badge {
-    font-size: 3rem;
-    font-weight: 800;
-    background: linear-gradient(135deg, #a78bfa, #60a5fa);
+.header-block {
+    text-align: center;
+    padding: 1.5rem 0;
+    background: linear-gradient(90deg, #7c3aed 0%, #2563eb 100%);
     -webkit-background-clip: text;
     -webkit-text-fill-color: transparent;
 }
-
-/* Tabs */
-.tab-nav button {
-    background: transparent !important;
-    color: #94a3b8 !important;
-    border: none !important;
-    border-bottom: 2px solid transparent !important;
-    padding: 0.6rem 1.2rem !important;
-    font-weight: 500 !important;
+.video-grid {
+    display: flex;
+    gap: 1.5rem;
+    margin-bottom: 1.0rem;
 }
-.tab-nav button.selected {
-    color: #a78bfa !important;
-    border-bottom: 2px solid #7c3aed !important;
+.video-container {
+    flex: 1;
+    background: #000 !important;
+    border-radius: 20px !important;
+    overflow: hidden;
+    border: 2px solid rgba(124,58,237,0.3);
+    aspect-ratio: 16/9;
+}
+.ai-avatar-container {
+    flex: 1;
+    background: radial-gradient(circle at center, #1e1b4b 0%, #0f172a 100%) !important;
+    border-radius: 24px !important;
+    border: 2px solid rgba(124,58,237,0.4);
+    aspect-ratio: 16/9;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    position: relative;
+    overflow: hidden;
+    box-shadow: 0 0 30px rgba(124, 58, 237, 0.2);
+}
+.ai-avatar-img {
+    width: 45%;
+    height: auto;
+    z-index: 5;
+    filter: drop-shadow(0 0 15px rgba(124, 58, 237, 0.5));
+    transition: transform 0.3s ease;
 }
 
-/* Text areas / inputs */
-.gr-textbox textarea, .gr-textbox input {
-    background: rgba(255,255,255,0.05) !important;
-    border: 1px solid rgba(255,255,255,0.1) !important;
-    border-radius: 10px !important;
-    color: #e2e8f0 !important;
+/* ── Alexa-like Animated Ring ── */
+.speaking-ring {
+    position: absolute;
+    width: 280px;
+    height: 280px;
+    border-radius: 50%;
+    border: 8px solid transparent;
+    border-top: 8px solid #60a5fa;
+    border-bottom: 8px solid #7c3aed;
+    filter: blur(8px);
+    opacity: 0.8;
+    animation: alexa-spin 2s linear infinite, alexa-pulse 1.5s ease-in-out infinite alternate;
+    z-index: 2;
 }
-label span { color: #94a3b8 !important; font-size: 0.82rem !important; }
+@keyframes alexa-spin {
+    from { transform: rotate(0deg); }
+    to { transform: rotate(360deg); }
+}
+@keyframes alexa-pulse {
+    from { transform: scale(0.95); opacity: 0.4; }
+    to { transform: scale(1.1); opacity: 0.9; }
+}
 
-/* File upload */
-.gr-file { background: rgba(255,255,255,0.04) !important; border-radius: 12px !important; }
-
-/* Dataframe */
-.gr-dataframe table { background: rgba(255,255,255,0.03) !important; }
-.gr-dataframe th { background: rgba(124,58,237,0.15) !important; color: #a78bfa !important; }
-.gr-dataframe td { border-color: rgba(255,255,255,0.07) !important; color: #cbd5e1 !important; }
+/* ── Status Pills ── */
+.status-pill {
+    padding: 0.4rem 1rem;
+    border-radius: 99px;
+    font-weight: 600;
+    font-size: 0.85rem;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+.status-listening { background: rgba(34, 197, 94, 0.15); color: #4ade80; border: 1px solid rgba(34, 197, 94, 0.3); }
+.status-thinking { background: rgba(234, 179, 8, 0.15); color: #facc15; border: 1px solid rgba(234, 179, 8, 0.3); animation: status-pulse 1.5s infinite; }
+.status-speaking { background: rgba(59, 130, 246, 0.15); color: #60a5fa; border: 1px solid rgba(59, 130, 246, 0.3); }
+@keyframes status-pulse {
+    0% { opacity: 1; }
+    50% { opacity: 0.6; }
+    100% { opacity: 1; }
+}
 """
 
-# ─── State helpers ─────────────────────────────────────────────────────────────
+# JavaScript to play base64-encoded audio directly in the browser
+PLAY_AUDIO_JS = """
+    async (b64) => {
+        if (!b64) return;
+        if (b64 === "STOP") {
+            window.aiAudioQueue = [];
+            window.aiIsPlaying = false;
+            if (window.aiCurrentPlayer) {
+                window.aiCurrentPlayer.pause();
+                window.aiCurrentPlayer.src = "";
+            }
+            return;
+        }
+        if (!window.aiAudioQueue) window.aiAudioQueue = [];
+        window.aiAudioQueue.push(b64);
+        
+        if (window.aiIsPlaying) return;
+        
+        const playNext = async () => {
+            if (window.aiAudioQueue.length === 0) {
+                window.aiIsPlaying = false;
+                return;
+            }
+            window.aiIsPlaying = true;
+            const nextB64 = window.aiAudioQueue.shift();
+            const audio = new Audio("data:audio/wav;base64," + nextB64);
+            window.aiCurrentPlayer = audio;
+            audio.onended = playNext;
+            try {
+                await audio.play();
+            } catch(e) {
+                console.error("Playback failed:", e);
+                playNext();
+            }
+        };
+        playNext();
+    }
+"""
+
+RESET_AUDIO_JS = """
+    () => {
+        window.aiAudioQueue = [];
+        window.aiIsPlaying = false;
+        if (window.aiCurrentPlayer) {
+            window.aiCurrentPlayer.pause();
+            window.aiCurrentPlayer.src = "";
+        }
+    }
+"""
 
 def make_fresh_state():
     return {
@@ -194,232 +255,242 @@ def make_fresh_state():
         "questions": [],
         "current_question": None,
         "answers": [],
-        "tool_calls": [],
-        "tool_outputs": [],
         "total_score": 0.0,
         "is_finished": False,
         "last_user_input": "",
-        "next_node": "",
+        "conversation_history": [],
+        "is_greeting_done": False,
+        "is_awaiting_confirmation": False,
+        "buffered_answer": "",
+        "difficulty": "Mid-Level",
+        "target_questions": 5,
+        "last_transcript_time": 0.0,
+        "pending_transcript": "",
+        "last_question_time": 0.0,
+        "last_processed_transcript": "",
+        "last_played_audio": "",
+        "speaking_until": 0.0,
     }
 
-# ─── Interview question generation (direct LLM call, no LangGraph ainvoke) ────
-
-async def _generate_question(skills: list, previous_questions: list) -> str:
-    """Ask the LLM to produce one interview question based on skills."""
-    from app.ai.llm_client import llm_client
-    skills_str = ", ".join(skills) if skills else "General"
-    prev_str = "\n".join(f"- {q}" for q in previous_questions) if previous_questions else "None"
-    messages = [
-        {
-            "role": "system",
-            "content": (
-                "You are an expert technical interviewer. "
-                "Generate ONE clear, specific interview question tailored to the candidate's skills. "
-                "Do NOT number the question. Return only the question text, nothing else."
-            ),
-        },
-        {
-            "role": "user",
-            "content": (
-                f"Candidate skills: {skills_str}\n"
-                f"Previous questions asked (do NOT repeat):\n{prev_str}\n\n"
-                "Generate the next interview question:"
-            ),
-        },
-    ]
-    response = await llm_client.get_completion(messages=messages)
-    return response.choices[0].message.content.strip()
-
-
-# ─── Backend functions ─────────────────────────────────────────────────────────
+async def _b64_to_audio(b64_str: Optional[str]) -> Optional[str]:
+    """Return the raw b64 string for direct JS playback."""
+    return b64_str or ""
 
 async def process_resume(resume_file):
-    """Parse uploaded resume and extract skills."""
+    """Parse resume locally and extract skills."""
     if resume_file is None:
         return "⚠️ No file uploaded.", "", []
 
     file_path = resume_file.name if hasattr(resume_file, "name") else str(resume_file)
     try:
-        text = resume_parser_service.parse(file_path)
-        if not text.strip():
-            return "⚠️ Empty resume file.", "", []
-
-        # Extract skills via LLM (MCP tool called directly for speed in UI)
-        from app.ai.mcp_server import extract_skills
-        raw = await extract_skills(text)
-        try:
-            skills = json.loads(raw)
-        except Exception:
-            skills = ["General"]
-
-        preview = text[:400] + "…" if len(text) > 400 else text
+        # 1. Parse content
+        content = resume_parser_service.parse(file_path)
+        
+        # 2. Extract skills
+        skills_json = await extract_skills(content)
+        skills = json.loads(skills_json) if skills_json else ["General"]
+        
+        preview = content[:500] + "..."
         skills_str = " · ".join(f"🔹 {s}" for s in skills)
         return preview, skills_str, skills
-
     except Exception as e:
-        return f"❌ Error parsing resume: {str(e)}", "", []
+        print(f"Error parsing resume: {e}")
+        return f"❌ Error: {str(e)}", "", []
 
 
-async def start_interview(skills: list, session_state: dict):
-    """Generate the first question directly via LLM (no LangGraph ainvoke)."""
-    print(f"DEBUG: start_interview called with skills: {skills}")
-    sys.stdout.flush()
+async def start_interview(resume_file, skills: list, difficulty: str, num_q: int, session_state: dict):
+    """Initialize LangGraph state and trigger first question."""
     resolved_skills = skills if skills else ["General"]
+    # resume_file is a file-like object from Gradio or a path string
+    file_path = resume_file.name if hasattr(resume_file, "name") else str(resume_file) if resume_file else "resume.pdf"
+
+    new_state = make_fresh_state()
+    new_state["skills"] = resolved_skills
+    new_state["difficulty"] = difficulty
+    new_state["target_questions"] = num_q
+    new_state["is_greeting_done"] = True
+    new_state["resume_text"] = file_path # In LangGraph this is used as file_path by the first node
+
+    # Start local STT
+    streaming_stt_service.add_custom_phrases(resolved_skills)
+    streaming_stt_service.start()
 
     try:
-        question_text = await _generate_question(resolved_skills, [])
-        if not question_text:
-            print("DEBUG: start_interview failed to generate question")
-            sys.stdout.flush()
-            return session_state, "❌ Could not generate a question. Check your Azure OpenAI credentials.", None, "1/5", "<span class='status-pill status-idle'>Error</span>", gr.Tabs(selected=0)
-
-        audio_path = tts_service.speak_text(question_text)
-
-        new_state = make_fresh_state()
-        new_state["skills"] = resolved_skills
-        q = {"id": "1", "text": question_text, "skill": resolved_skills[0] if resolved_skills else "General", "difficulty": "Medium"}
-        new_state["current_question"] = q
-        new_state["questions"] = [q]
-
-        print(f"DEBUG: start_interview successful, returning question and tab switch to 'interview'")
-        sys.stdout.flush()
-        return (
-            new_state,
-            question_text,
-            audio_path,
-            "Question 1 / 5",
-            "<span class='status-pill status-listening'>🎙 Listening…</span>",
-            gr.Tabs(selected=1),
-        )
-    except Exception as e:
-        print(f"DEBUG: start_interview ERROR: {e}")
-        import traceback; traceback.print_exc()
-        sys.stdout.flush()
-        return session_state, f"❌ Error: {str(e)}", None, "1/5", "<span class='status-pill status-idle'>Error</span>", gr.Tabs(selected=0)
-
-
-async def submit_answer(audio_input, session_state: dict):
-    """Transcribe audio → evaluate answer → generate next question, all via direct async calls."""
-    print(f"DEBUG: submit_answer CALLED with audio_input type: {type(audio_input)}")
-    print(f"DEBUG: audio_input value: {audio_input}")
-    sys.stdout.flush()
-
-    if audio_input is None:
-        print("DEBUG: audio_input is None - NO AUDIO RECEIVED")
-        sys.stdout.flush()
-        return session_state, "⚠️ No audio recorded.", "Please record an answer.", None, None, "–", "<span class='status-pill status-idle'>Waiting…</span>", False, gr.Tabs()
-
-    # Check file existence if it's a string path
-    if isinstance(audio_input, str):
-        if os.path.exists(audio_input):
-            size = os.path.getsize(audio_input)
-            print(f"DEBUG: Audio file exists at {audio_input}, size: {size} bytes")
-        else:
-            print(f"DEBUG: Audio file path provided but FILE NOT FOUND: {audio_input}")
-        sys.stdout.flush()
+        # First question generation - Run graph until first question
+        result = {}
+        async for chunk in app_graph.astream({
+            "resume_text": file_path,
+            "skills": resolved_skills,
+            "difficulty": difficulty,
+            "questions": [],
+            "conversation_history": [],
+            "answers": []
+        }, config={"recursion_limit": 50}):
+            # Each chunk is a dict {node_name: {node_outputs}}
+            for node_name, output in chunk.items():
+                print(f"--- GRAPH STEP: {node_name} ---")
+                status_map = {
+                    "resume_parser": "Sarah is reading your resume...",
+                    "skill_extractor": "Sarah is identifying your key skills...",
+                    "process_turn": "Sarah is preparing the first question..."
+                }
+                status_txt = status_map.get(node_name, f"Sarah is {node_name}...")
+                
+                yield (
+                    new_state,
+                    "Sarah is thinking...",
+                    "",
+                    f"Round 1 / {num_q}",
+                    f"<span class='status-pill status-thinking'>{status_txt}</span>",
+                    gr.update(selected=1),
+                    True,
+                    gr.update(active=True),
+                )
+                
+                result.update(output)
+                if node_name == "process_turn":
+                    break
+            if "process_turn" in chunk:
+                break
         
-        if not os.path.exists(audio_input):
-            return session_state, "❌ Audio file not found on server.", "", None, "–", "<span class='status-pill status-idle'>File Error</span>", False, gr.Tabs()
-    elif isinstance(audio_input, dict):
-        print(f"DEBUG: audio_input is a DICT: {audio_input.keys()}")
-        sys.stdout.flush()
-        # Gradio sometimes sends a dict with 'name' (path)
-        path = audio_input.get("name")
-        if path:
-            print(f"DEBUG: Extracted path from dict: {path}")
-            sys.stdout.flush()
-            audio_input = path
+        q_obj = result.get("current_question")
+        if q_obj:
+            if isinstance(q_obj, dict):
+                greeting_text = str(q_obj.get("text", ""))
+            else:
+                greeting_text = str(getattr(q_obj, "text", ""))
         else:
-            return session_state, "❌ Unexpected audio data format.", "", None, "–", "<span class='status-pill status-idle'>Format Error</span>", False, gr.Tabs()
+            greeting_text = "Hello! I'm Sarah. I've reviewed your background. Are you ready to dive into the technical questions?"
+            
+        audio_b64 = await _get_audio_b64(greeting_text)
+        
+        # Update session state with graph output
+        new_state.update({
+            "current_question": q_obj,
+            "questions": result.get("questions", [])
+        })
+        
+    except Exception as e:
+        print(f"Error starting interview: {e}")
+        import traceback
+        traceback.print_exc()
+        greeting_text = "Hello! I'm Sarah, your AI interviewer. I'm ready to begin. To start, could you please introduce yourself and tell me about your experience?"
+        audio_b64 = await _get_audio_b64(greeting_text)
 
-    # ── Step 1: STT ──
-    print("DEBUG: Starting transcription...")
-    sys.stdout.flush()
-    transcript = stt_service.transcribe_audio(audio_input)
-    print(f"DEBUG: Transcription complete. Result: {transcript[:50]}...")
-    sys.stdout.flush()
+    yield (
+        new_state,
+        greeting_text,
+        audio_b64,
+        f"Round 1 / {num_q}",
+        "<span class='status-pill status-listening'>🎙 Listening…</span>",
+        gr.update(selected=1),
+        True,
+        gr.update(active=True),
+    )
 
-    if not transcript or transcript.startswith("STT Error") or "Could not understand" in transcript:
-        return session_state, transcript, "❗ Could not understand audio. Please speak clearly and try again.", None, None, "–", "<span class='status-pill status-listening'>🎙 Try Again</span>", False, gr.Tabs()
 
-    # ── Step 2: Evaluate + next question ──
-    state = dict(session_state)
-    q = state.get("current_question")
-    if not q:
-        return session_state, transcript, "No active question found. Please start the interview first.", None, None, "–", "<span class='status-pill status-idle'>Idle</span>", False, gr.Tabs()
+async def submit_answer(audio_input, session_state: dict, override_transcript: str = None):
+    """Process user input through LangGraph locally and yield updates."""
+    transcript = override_transcript or ""
+
+    if not transcript:
+        yield session_state, "⚠️ No transcript.", "Please speak something.", None, None, "–", "<span class='status-pill status-idle'>Waiting…</span>", False, gr.update(), False
+        return
+
+    # SIGNAL STOP to the JS Queue only if intentional barge-in or if Sarah is not estimated to be speaking
+    curr_time = time.time()
+    sarah_speaking = curr_time < session_state.get("speaking_until", 0.0)
+    is_long_input = len(transcript.split()) > 3
+    
+    stop_signal = ""
+    if not sarah_speaking or is_long_input:
+        stop_signal = "STOP"
+        
+    yield session_state, transcript, "🤔 Sarah is thinking...", "", stop_signal, gr.update(), "<span class='status-pill status-thinking'>🤔 Sarah is thinking...</span>", False, gr.update(), False
 
     try:
-        from app.ai.mcp_server import evaluate_answer as mcp_evaluate
-        q_text = q["text"] if isinstance(q, dict) else q.text
-        q_id   = q["id"]   if isinstance(q, dict) else q.id
+        # Run LangGraph turn - watch for result in streaming
+        result = {}
+        async for chunk in app_graph.astream({
+            "skills": session_state.get("skills", []),
+            "difficulty": session_state.get("difficulty", "Mid-Level"),
+            "current_question": session_state.get("current_question"),
+            "questions": session_state.get("questions", []),
+            "answers": session_state.get("answers", []),
+            "last_user_input": transcript,
+            "conversation_history": session_state.get("conversation_history", [])
+        }, config={"recursion_limit": 50}):
+             for node_name, output in chunk.items():
+                print(f"--- GRAPH STEP: {node_name} ---")
+                status_map = {
+                    "process_turn": "Sarah is reviewing and drafting...",
+                    "tools": "Sarah is looking up details..."
+                }
+                status_txt = status_map.get(node_name, "Sarah is thinking...")
+                yield session_state, transcript, status_txt, "", "", gr.update(), f"<span class='status-pill status-thinking'>{status_txt}</span>", False, gr.update(), False
+                
+                result.update(output)
+                if node_name == "process_turn":
+                    break
+             if "process_turn" in chunk:
+                break
 
-        # Evaluate answer
-        raw = await mcp_evaluate(q_text, transcript)
-        try:
-            # Strip markdown code fences if present
-            clean = raw.strip().strip("```json").strip("```").strip()
-            eval_data = json.loads(clean)
-        except Exception:
-            eval_data = {"score": 0.5, "feedback": raw}
-
-        score    = float(eval_data.get("score", 0.5))
-        feedback = eval_data.get("feedback", "Good attempt.")
-
-        # Record answer
-        answers = list(state.get("answers", []))
-        answers.append({"question_id": q_id, "text": transcript, "score": score, "feedback": feedback})
-        state["answers"] = answers
-
-        # Done after 5 questions
-        if len(answers) >= 5:
-            state["total_score"] = sum(a["score"] for a in answers) / len(answers)
-            state["is_finished"] = True
-            answer_count = len(answers)
-            print("DEBUG: submit_answer FINISHED, switching to 'report' tab")
-            sys.stdout.flush()
-            return (
-                state,
-                transcript,
-                f"✅ {feedback}",
-                gr.update(), # Keep current question text
-                None,
-                f"Done — {answer_count}/5 answers",
-                "<span class='status-pill status-idle'>Interview Complete 🎉</span>",
-                True,
-                gr.Tabs(selected=2),
-            )
-
-        # Generate next question
-        prev_questions = [q2["text"] if isinstance(q2, dict) else q2.text for q2 in state.get("questions", [])]
-        next_q_text = await _generate_question(state.get("skills", ["General"]), prev_questions)
-        next_q_num  = len(answers) + 1
-        next_q = {"id": str(next_q_num), "text": next_q_text, "skill": "General", "difficulty": "Medium"}
-        state["current_question"] = next_q
-        state["questions"] = list(state.get("questions", [])) + [next_q]
-
-        audio_path = tts_service.speak_text(next_q_text)
-        answer_count = len(answers)
-        progress   = f"Question {answer_count + 1} / 5"
+        # Update local state from result
+        session_state.update({
+            "answers": result.get("answers", session_state.get("answers", [])),
+            "total_score": result.get("total_score", session_state.get("total_score", 0.0)),
+            "questions": result.get("questions", session_state.get("questions", [])),
+            "current_question": result.get("current_question", session_state.get("current_question"))
+        })
         
-        # Resilience delay for Windows socket flushing
-        await asyncio.sleep(0.1)
+        # Check if finished
+        num_ans = len(session_state["answers"])
+        target = session_state.get("target_questions", 5)
+        is_done = num_ans >= target
+        session_state["is_finished"] = is_done
 
-        return (
-            state,
-            transcript,
-            f"✅ Score {score:.0%} — {feedback}",
-            next_q_text,
-            audio_path,
-            progress,
-            "<span class='status-pill status-listening'>🎙 Listening…</span>",
-            False,
-            gr.update(),
-        )
+        # AI Response (Next question or closing)
+        q_obj = session_state.get("current_question")
+        if q_obj:
+            if isinstance(q_obj, dict):
+                msg_text = str(q_obj.get("text", ""))
+            else:
+                msg_text = str(getattr(q_obj, "text", ""))
+        else:
+            msg_text = "Thank you! That concludes our interview. I'm generating your report now."
+        
+        if is_done and not msg_text:
+             msg_text = "Thank you! That concludes our interview. I'm generating your report now."
+
+        audio_b64 = await _get_audio_b64(msg_text)
+        
+        # Estimate duration for UI ring
+        text_len = len(msg_text)
+        estimated_dur = (text_len / 15) + 0.5
+        curr_until = session_state.get("speaking_until", 0.0)
+        session_state["speaking_until"] = max(curr_until, time.time()) + estimated_dur
+
+        status_html = "<span class='status-pill status-listening'>🎙 Listening…</span>"
+        if is_done:
+            status_html = "<span class='status-pill status-idle'>Interview Finished</span>"
+
+        tab_upd = gr.update()
+        if is_done:
+            # Wait for Sarah to finish speaking before switching to report
+            await asyncio.sleep(estimated_dur + 1.0)
+            tab_upd = gr.update(selected=2)
+            streaming_stt_service.stop()
+
+        progress = f"Round {min(num_ans + 1, target)} / {target}"
+        
+        yield (session_state, transcript, "📢 Speaking...", msg_text, audio_b64,
+               progress, status_html, is_done, tab_upd, True)
+
     except Exception as e:
-        print(f"DEBUG: submit_answer ERROR: {e}")
-        import traceback; traceback.print_exc()
-        sys.stdout.flush()
-        return session_state, f"Error: {e}", str(e), gr.update(), None, "–", "<span class='status-pill status-idle'>Error</span>", False, gr.Tabs()
+        import traceback
+        traceback.print_exc()
+        yield (session_state, "", f"Error: {e}", "", "", gr.update(),
+               "<span class='status-pill status-idle'>Error</span>", False, gr.update(), False)
 
 
 async def build_report(session_state: dict):
@@ -452,7 +523,7 @@ async def build_report(session_state: dict):
 
 # ─── Gradio UI ─────────────────────────────────────────────────────────────────
 
-with gr.Blocks(css=CUSTOM_CSS, title="AI Mock Interview") as demo:
+with gr.Blocks(title="AI Mock Interview") as demo:
 
     session_state = gr.State(make_fresh_state())
     extracted_skills = gr.State([])
@@ -500,6 +571,22 @@ with gr.Blocks(css=CUSTOM_CSS, title="AI Mock Interview") as demo:
                         interactive=False,
                         placeholder="Skills will be highlighted here…",
                     )
+                    
+                    with gr.Row():
+                        difficulty_radio = gr.Radio(
+                            choices=["Junior", "Mid-Level", "Senior", "Expert"],
+                            value="Mid-Level",
+                            label="Interview Difficulty",
+                            container=True
+                        )
+                        num_q_slider = gr.Slider(
+                            minimum=1,
+                            maximum=10,
+                            value=5,
+                            step=1,
+                            label="Number of Questions",
+                            container=True
+                        )
 
             with gr.Row():
                 start_btn = gr.Button(
@@ -508,61 +595,63 @@ with gr.Blocks(css=CUSTOM_CSS, title="AI Mock Interview") as demo:
                 gr.HTML('<div style="color:#64748b;font-size:0.82rem;padding:0.6rem;">5 personalised questions · ~10 min · Voice interaction</div>')
 
         # ══════════════════════════════════════════════
-        #  TAB 2 — Interview Room
+        #  TAB 2 — Interview Room (Video Call UI)
         # ══════════════════════════════════════════════
         with gr.TabItem("🎙 Interview", id=1):
+            # 1. Video Grid
+            with gr.Row(elem_classes=["video-grid"]):
+                with gr.Column(elem_classes=["video-container"]):
+                    gr.Video(sources=["webcam"], label="User Feed", interactive=True)
+                
+                with gr.Column(elem_classes=["ai-avatar-container"]):
+                    speaking_ring = gr.HTML('<div class="speaking-ring"></div>', visible=False)
+                    gr.Image(
+                        value="tech_ai_mascot_avatar_1774336888317.png", 
+                        elem_classes=["ai-avatar-img"],
+                        show_label=False,
+                        container=False
+                    )
+
+            # 2. Control Bar
+            with gr.Row(elem_classes=["control-bar"]):
+                live_mode = gr.Checkbox(label="Live Mode", value=False)
+                mute_btn = gr.Button("🔇", size="sm")
+                cam_btn = gr.Button("📷", size="sm")
+                stop_btn = gr.Button("📞", variant="stop", size="sm")
+
+            # 3. Info & Interaction
             with gr.Row():
-                # Left: AI avatar + question
                 with gr.Column(scale=1):
-                    gr.HTML("""
-                    <div class="glass-card avatar-wrap">
-                        <div class="avatar-ring">🤖</div>
-                        <span style="color:#a78bfa;font-weight:600;font-size:1rem;">AI Interviewer</span>
-                    </div>
-                    """)
-                    status_html = gr.HTML("<span class='status-pill status-idle'>Idle — Start interview to begin</span>")
-                    progress_lbl = gr.Label(label="Progress", value="—")
+                    status_html = gr.HTML("<span class='status-pill status-idle'>Idle — Awaiting Start</span>")
+                    progress_lbl = gr.Label(label="Round", value="—")
+                    # Component to receive b64 and trigger JS playback
+                    ai_audio_b64 = gr.Textbox(visible=False, interactive=False)
 
-                # Middle: Question + AI audio
-                with gr.Column(scale=2):
-                    gr.HTML('<div class="glass-card"><h3 style="color:#a78bfa;margin-bottom:0.5rem;">💬 Question</h3></div>')
+                with gr.Column(scale=3):
                     question_box = gr.Textbox(
-                        label="",
-                        lines=5,
+                        label="Interviewer:",
+                        placeholder="Greeting...",
                         interactive=False,
-                        placeholder="The AI interviewer's question will appear here…",
+                        lines=2
                     )
-                    ai_audio_out = gr.Audio(
-                        label="🔊 AI Interviewer (auto-play)",
-                        autoplay=True,
-                        interactive=False,
-                        type="filepath",
+                    with gr.Row():
+                        mic_input = gr.Audio(
+                        sources=["microphone"],
+                        type="numpy", # NumPy for direct streaming
+                        label="System Microphone Active",
+                        streaming=True,
+                        visible=False
                     )
+                    submit_btn = gr.Button("🚀 Send Answer (Manual)", variant="primary", elem_classes=["primary-btn"], visible=False)
 
-                # Right: Mic + transcript + feedback
-                with gr.Column(scale=2):
-                    gr.HTML('<div class="glass-card"><h3 style="color:#a78bfa;margin-bottom:0.5rem;">🎤 Your Answer</h3></div>')
-                    mic_input = gr.Audio(
-                        sources=["microphone", "upload"],
-                        label="Record or Upload your answer",
-                        type="filepath",
-                        # Removed format="wav" to avoid ffmpeg dependency on Windows
-                        interactive=True,
-                    )
-                    submit_btn = gr.Button("✅ Submit Answer", elem_classes=["primary-btn"], variant="primary")
+            with gr.Row():
+                transcript_box = gr.Textbox(label="Last Transcript", interactive=False)
+                feedback_box = gr.Textbox(label="Feedback Snippet", interactive=False)
 
-                    transcript_box = gr.Textbox(
-                        label="📝 Transcribed Answer",
-                        lines=3,
-                        interactive=False,
-                        placeholder="Your words will appear here after submission…",
-                    )
-                    feedback_box = gr.Textbox(
-                        label="💡 AI Feedback",
-                        lines=4,
-                        interactive=False,
-                        placeholder="Score and feedback appear here…",
-                    )
+            # 4. Timer for Live Mode & Transcript polling (0.15s tick for responsiveness)
+            auto_timer = gr.Timer(0.15, active=False)
+            
+            # mic continues in background via Azure native SDK
 
         # ══════════════════════════════════════════════
         #  TAB 3 — Report Card
@@ -597,19 +686,114 @@ with gr.Blocks(css=CUSTOM_CSS, title="AI Mock Interview") as demo:
         outputs=[resume_preview, skills_display, extracted_skills],
     )
 
+    # 1. Audio Playback Handler (Global for all audio events)
+    ai_audio_b64.change(
+        fn=None,
+        inputs=[ai_audio_b64],
+        js=PLAY_AUDIO_JS
+    )
+
     # 2. Start interview
     start_btn.click(
         fn=start_interview,
-        inputs=[extracted_skills, session_state],
-        outputs=[session_state, question_box, ai_audio_out, progress_lbl, status_html, tabs],
+        inputs=[resume_file, extracted_skills, difficulty_radio, num_q_slider, session_state],
+        outputs=[session_state, question_box, ai_audio_b64, progress_lbl, status_html, tabs, speaking_ring, auto_timer],
+        js=None,
     )
 
-    # 3. Submit answer
-    submit_btn.click(
-        fn=submit_answer,
-        inputs=[mic_input, session_state],
-        outputs=[session_state, transcript_box, feedback_box, question_box, ai_audio_out, progress_lbl, status_html, switch_tab, tabs],
+    # ── Streaming Open Mic Logic ──
+    # Removed browser stream wiring as we use system microphone directly in StreamingSTTService
+
+    async def _check_transcript(state):
+        """Check for fully recognized sentences from Azure with silence detection."""
+        import time
+        import re
+        
+        # --- ECHO SUPPRESSION & BARGE-IN ---
+        curr_time = time.time()
+        sarah_speaking_until = state.get("speaking_until", 0.0)
+        # We use a slight lead-time to avoid cutting off the end of Sarah's audio
+        is_sarah_speaking = curr_time < (sarah_speaking_until - 0.2)
+        
+        text = streaming_stt_service.get_latest_transcript()
+        
+        # If Sarah is speaking and we see text, check for barge-in
+        if is_sarah_speaking and text:
+            if len(text.split()) > 3:
+                print(f"DEBUG: Barge-in detected: '{text}'")
+                # We DON'T return/yield here, allowing the text to be buffered below
+            else:
+                # Likely echo or short noise. We don't want to stop Sarah for this,
+                # but we also don't want to discard it yet.
+                print(f"DEBUG: Potential echo/short answer during Sarah's speech: '{text}'")
+                # Fall through to buffering
+        elif is_sarah_speaking and not text:
+            # No final transcript yet, just Sarah speaking.
+            yield (state,) + (gr.update(),) * 10
+            return
+        curr_time = time.time()
+        
+        if text:
+            # Standard buffering for longer answers
+            pending_val = (state.get("pending_transcript", "") + " " + text).strip()
+            state["pending_transcript"] = pending_val
+            state["last_transcript_time"] = curr_time
+            # Update the transcript box in the UI immediately
+            yield (state, pending_val) + (gr.update(),) * 9
+            return
+
+        # --- Intermediate Results Check ---
+        inter_text = streaming_stt_service.get_intermediate_transcript()
+        if inter_text:
+             pending = state.get("pending_transcript", "")
+             display_text = (pending + " " + inter_text).strip()
+             # Fast visual feedback: "I'm listening..." or similar
+             status_html_val = f"<span class='status-pill status-listening'>🎙 {inter_text[:30]}...</span>"
+             # IMPORTANT: Reset the silence timer so we don't process mid-sentence
+             state["last_transcript_time"] = curr_time
+             # Update transcript box with partial text
+             yield (state, display_text, gr.update(), gr.update(), gr.update(), gr.update(), status_html_val) + (gr.update(),) * 4
+             return
+
+        # No new text, check if we have pending text that has 'settled'
+        pending = state.get("pending_transcript", "")
+        last_time = state.get("last_transcript_time", 0.0)
+        
+        # Silence threshold: 0.4s after the last detected word before processing.
+        # The intermediate-transcript path resets last_transcript_time while the user
+        # is actively speaking, so this only fires after a genuine pause.
+        if pending and (curr_time - last_time > 0.4):
+            print(f"DEBUG: Silence detected (0.4s). Processing pending transcript: '{pending}'")
+            state["pending_transcript"] = "" # Clear pending buffer
+            
+            # Yield THINKING state
+            yield (state, gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), "<span class='status-pill status-thinking'>🤔 Sarah is thinking...</span>", gr.update(), gr.update(), True, gr.update())
+            
+            async for result in submit_answer(None, state, override_transcript=pending):
+                (
+                    new_state, transcript, status_msg, q_text, audio, 
+                    progress, status_html_val, is_done, tab_upd, ring_vis
+                ) = result
+                state.update(new_state)
+                timer_upd = gr.update(active=False) if is_done else gr.update()
+                yield (state, transcript, status_msg, q_text, audio, progress, status_html_val, is_done, tab_upd, ring_vis, timer_upd)
+            return
+        
+        # Match the 11 outputs
+        # Set speaking_ring (10th) to False if idling
+        yield (state, gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), False, gr.update())
+
+    # Update auto_timer tick to match the 11 outputs
+    auto_timer.tick(
+        fn=_check_transcript,
+        inputs=[session_state],
+        outputs=[
+            session_state, transcript_box, feedback_box, question_box, ai_audio_b64, 
+            progress_lbl, status_html, switch_tab, tabs, speaking_ring, auto_timer
+        ]
     )
+
+    # ... rest of event wiring ...
 
     # Automatically clear the transcript box when the user starts a new recording or uploads a new file
     mic_input.change(
@@ -631,37 +815,38 @@ with gr.Blocks(css=CUSTOM_CSS, title="AI Mock Interview") as demo:
     )
 
 
-    # 5. Retry
+    # 5. Retry / End Call
     def _reset():
-        print("DEBUG: _reset called, switching to 'setup' tab")
-        sys.stdout.flush()
         fresh = make_fresh_state()
-        return fresh, [], "", "", None, "—", "<span class='status-pill status-idle'>Idle</span>", "*Complete the interview to see your report.*", [], gr.Tabs(selected=0)
+        streaming_stt_service.stop()
+        return fresh, [], "", "", "", "—", "<span class='status-pill status-idle'>Idle</span>", "*Complete the interview to see your report.*", [], gr.Tabs(selected=0), False, gr.update(active=False)
 
     retry_btn.click(
         fn=_reset,
         inputs=[],
-        outputs=[session_state, extracted_skills, question_box, transcript_box, ai_audio_out, progress_lbl, status_html, report_summary, report_table, tabs],
+        outputs=[session_state, extracted_skills, question_box, transcript_box, ai_audio_b64, progress_lbl, status_html, report_summary, report_table, tabs, speaking_ring, auto_timer],
+    )
+    stop_btn.click(
+        fn=_reset,
+        inputs=[],
+        outputs=[session_state, extracted_skills, question_box, transcript_box, ai_audio_b64, progress_lbl, status_html, report_summary, report_table, tabs, speaking_ring, auto_timer],
     )
 
 
 if __name__ == "__main__":
-    if sys.platform == "win32":
-        try:
-            loop = asyncio.get_event_loop()
-            def silent_handler(loop, context):
-                msg = context.get("message")
-                exc = context.get("exception")
-                if "WinError 10054" in str(msg) or "WinError 10054" in str(exc) or isinstance(exc, ConnectionResetError):
-                    return
-                loop.default_exception_handler(context)
-            loop.set_exception_handler(silent_handler)
-        except Exception:
-            pass
+    # Pre-flight check (attempt to find backend on startup - skipped in local mode)
+    pass
 
-    demo.launch(
-        server_name="127.0.0.1",
-        server_port=7860,
-        share=False,
-        show_error=True,
-    )
+    try:
+        demo.launch(
+            server_name="127.0.0.1",
+            share=False,
+            show_error=True,
+            css=CUSTOM_CSS,
+        )
+    finally:
+        print("🛑 Shutting down services...")
+        try:
+            streaming_stt_service.stop()
+        except Exception as e:
+            print(f"Error stopping STT: {e}")
