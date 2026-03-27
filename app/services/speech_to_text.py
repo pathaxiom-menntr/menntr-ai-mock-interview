@@ -36,11 +36,9 @@ class SpeechToTextService:
             import azure.cognitiveservices.speech as speechsdk
             speech_config = self._get_config()
             
-            # Detect format by header if extension is missing/generic
             ext = audio_file_path.lower()
             is_compressed = ext.endswith((".mp3", ".ogg", ".webm", ".m4a", ".aac"))
             
-            # Check for common headers if needed
             header = b""
             try:
                 with open(audio_file_path, "rb") as f:
@@ -48,10 +46,9 @@ class SpeechToTextService:
             except Exception:
                 pass
 
-            # Update formats based on signature if extension is misleading
             if header.startswith(b"RIFF") and b"WAVE" in header:
                 is_compressed = False
-            elif header.startswith(b"\x1a\x45\xdf\xa3"): # WebM/MKV
+            elif header.startswith(b"\x1a\x45\xdf\xa3"):
                 is_compressed = True
             elif header.startswith(b"OggS"):
                 is_compressed = True
@@ -59,14 +56,11 @@ class SpeechToTextService:
             print(f"DEBUG STT: Processing {audio_file_path} (compressed={is_compressed}, size={os.path.getsize(audio_file_path)})")
 
             if is_compressed:
-                # Determine specific format for Azure
                 fmt = speechsdk.audio.AudioStreamContainerFormat.MP3
                 if ext.endswith(".ogg") or header.startswith(b"OggS"):
                     print("DEBUG STT: Using OGG_OPUS format")
                     fmt = speechsdk.audio.AudioStreamContainerFormat.OGG_OPUS
                 elif ext.endswith((".webm", ".mkv")) or header.startswith(b"\x1a\x45\xdf\xa3"):
-                    # NOTE: Azure doesn't officially support WebM container, but many browers' WebM uses Opus
-                    # If ffmpeg is missing, this might still fail if not OGG encapsulated.
                     print("DEBUG STT: Detected WebM/Matroska container. Trying OGG_OPUS fallback.")
                     fmt = speechsdk.audio.AudioStreamContainerFormat.OGG_OPUS
                 else:
@@ -81,7 +75,6 @@ class SpeechToTextService:
                 stream.close()
                 audio_config = speechsdk.audio.AudioConfig(stream=stream)
             else:
-                # Default for WAV
                 print("DEBUG STT: Using standard AudioConfig (WAV/PCM)")
                 audio_config = speechsdk.audio.AudioConfig(filename=audio_file_path)
 
