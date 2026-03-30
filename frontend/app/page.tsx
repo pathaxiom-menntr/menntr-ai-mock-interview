@@ -439,7 +439,7 @@ export default function HomePage() {
                       transition={{ duration: 0.6 }}
                     >
                       <h2 className="text-4xl md:text-5xl font-bold mb-6">
-                        Why Choose InterviewLab?
+                        Why Choose Menntr?
                       </h2>
                       <p className="text-xl text-muted-foreground mb-8">
                         Join thousands of job seekers who are acing their interviews with our platform.
@@ -558,7 +558,7 @@ export default function HomePage() {
               viewport={{ once: true }}
               transition={{ delay: 0.2 }}
             >
-              Join thousands of job seekers who are improving their interview skills with InterviewLab
+              Join thousands of job seekers who are improving their interview skills with Menntr
             </motion.p>
             <motion.div
               whileHover={{ scale: 1.05 }}
@@ -598,7 +598,7 @@ export default function HomePage() {
               whileHover={{ scale: 1.05 }}
             >
               <MessageSquare className="h-6 w-6 text-primary" />
-              <span className="text-lg font-semibold">InterviewLab</span>
+              <span className="text-lg font-semibold">Menntr</span>
             </motion.div>
             <div className="flex gap-6 text-sm text-muted-foreground">
               <motion.div whileHover={{ scale: 1.1 }}>
@@ -614,7 +614,7 @@ export default function HomePage() {
             </div>
           </div>
           <div className="mt-8 text-center text-sm text-muted-foreground">
-            © {new Date().getFullYear()} InterviewLab. All rights reserved.
+            © {new Date().getFullYear()} Menntr. All rights reserved.
           </div>
         </div>
       </motion.footer>

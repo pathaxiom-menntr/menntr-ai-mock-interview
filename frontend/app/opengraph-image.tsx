@@ -1,7 +1,7 @@
 import { ImageResponse } from 'next/og';
 
 export const runtime = 'edge';
-export const alt = 'InterviewLab - AI-Powered Interview Preparation';
+export const alt = 'Menntr - AI-Powered Interview Preparation';
 export const size = {
   width: 1200,
   height: 630,
@@ -87,7 +87,7 @@ export default async function Image() {
                 lineHeight: '1.2',
               }}
             >
-              InterviewLab
+              Menntr
             </h1>
             <p
               style={{

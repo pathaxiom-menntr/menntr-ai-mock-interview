@@ -118,8 +118,10 @@ async def bootstrap_resources(ctx: JobContext, interview_id: int) -> AgentResour
             resources.tts = None
 
         # Initialize STT with graceful error handling
+        # language="en" forces English-only transcription to prevent Whisper
+        # from auto-detecting and transcribing non-English speech in other scripts
         try:
-            resources.stt = openai.STT()
+            resources.stt = openai.STT(language="en")
         except Exception as e:
             logger.exception("STT creation failed, will retry later")
             resources.stt = None

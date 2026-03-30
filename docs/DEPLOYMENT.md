@@ -2,7 +2,7 @@
 
 ## Overview
 
-InterviewLab deploys to:
+Menntr deploys to:
 
 - **Railway**: Backend API, Agent, Database, Redis
 - **Vercel**: Frontend (Next.js)

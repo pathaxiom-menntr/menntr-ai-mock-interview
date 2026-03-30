@@ -6,6 +6,7 @@ sandbox_guidance, code_review, evaluation, and closing.
 
 import logging
 import json
+import re
 import uuid
 import time
 from typing import TYPE_CHECKING
@@ -19,10 +20,15 @@ from src.services.orchestrator.context_builders import (
     build_resume_context, build_conversation_context, build_job_context
 )
 from src.services.orchestrator.constants import (
-    COMMON_SYSTEM_PROMPT,
+    COMMON_SYSTEM_PROMPT, TERMINATION_MESSAGE,
     SANDBOX_POLL_INTERVAL_SECONDS, SANDBOX_STUCK_THRESHOLD_SECONDS,
     TEMPERATURE_CREATIVE, TEMPERATURE_BALANCED, TEMPERATURE_ANALYTICAL, TEMPERATURE_QUESTION,
-    DEFAULT_MODEL
+    DEFAULT_MODEL,
+    DEPTH_RULES, SENIORITY_MID, COVERAGE_IN_PROGRESS, COVERAGE_ADEQUATE,
+    PROBE_DEPTH_DESCRIPTORS,
+)
+from src.services.orchestrator.plan_generator import (
+    get_next_pending_topic, get_topic_by_id, update_topic_in_plan
 )
 logger = logging.getLogger(__name__)
 
@@ -136,117 +142,186 @@ class ActionNodeMixin:
             }
 
     async def question_node(self, state: InterviewState) -> InterviewState:
-        """Generate adaptive question based on resume exploration.
+        """Generate the next question, driven by the interview plan when available.
 
-        Returns partial state update. conversation_history is written by finalize_turn_node.
+        Plan-driven path:
+          1. Get next pending topic from plan.
+          2. Use topic's initial_question as the anchor.
+          3. LLM crafts a natural, conversational version (not verbatim).
+          4. Mark topic as in_progress and set current_topic_id.
+
+        Reactive fallback (no plan):
+          LLM generates freely based on resume + conversation (old behaviour).
         """
-        conversation_context = build_conversation_context(
-            state, self.interview_logger)
+        conversation_context = build_conversation_context(state, self.interview_logger)
         resume_context = build_resume_context(state)
         job_context = build_job_context(state)
         candidate_name = state.get("candidate_name")
+        name_note = (
+            f"\nCandidate's first name: {candidate_name.split()[0]}"
+            if candidate_name else ""
+        )
 
-        if self.interview_logger:
-            self.interview_logger.log_context_injection("question_generation", {
-                "conversation_length": len(conversation_context),
-                "resume_context_length": len(resume_context),
-                "turn": state.get("turn_count", 0),
-                "last_node": state.get("last_node"),
-            })
+        # ── Plan-driven path ──────────────────────────────────────────────────
+        plan = state.get("interview_plan")
+        next_topic = get_next_pending_topic(plan) if plan else None
 
-        topics_covered = state.get("topics_covered", [])
-        questions_asked = [q["text"]
-                           for q in state.get("questions_asked", [])[-10:]]
+        if next_topic:
+            seniority = state.get("seniority_level") or plan.get("seniority_level", SENIORITY_MID)
+            depth_rules = DEPTH_RULES.get(seniority, DEPTH_RULES[SENIORITY_MID])
+            expected_depth = depth_rules["expected_depth"]
 
-        last_user_response = ""
-        if state.get("conversation_history"):
+            last_user_response = ""
             for msg in reversed(state.get("conversation_history", [])):
                 if msg.get("role") == "user":
                     last_user_response = msg.get("content", "")
                     break
 
-        name_note = f"\nCandidate's name: {candidate_name.split()[0] if candidate_name else 'Not provided'}\nYou can use their first name naturally if it feels appropriate." if candidate_name else ""
+            prompt = f"""You are conducting an interview. Move to the next planned topic.
+{name_note}
 
-        topics_info = ""
-        if topics_covered:
-            topics_info = f"\nTopics Already Covered: {', '.join(topics_covered)}\nTry to explore new topics or go deeper into existing ones."
+NEXT TOPIC TO COVER: {next_topic['topic']}
+CATEGORY: {next_topic['category']}
+SUGGESTED OPENING: "{next_topic['initial_question']}"
+CANDIDATE SENIORITY: {seniority} (expected depth: {expected_depth})
 
-        prompt = f"""You are conducting an interview. Generate the next question based on the full context below.
-        {name_note}
-        {job_context}Resume Context:
-        {resume_context}
-        {topics_info}
+{job_context}
+Resume Context:
+{resume_context}
 
-        Full Conversation History:
-        {conversation_context}
+Recent Conversation:
+{conversation_context[-2000:]}
 
-        Questions Already Asked:
-        {chr(10).join(f"- {q}" for q in questions_asked) if questions_asked else "None yet"}
+CANDIDATE'S LAST ANSWER (if any): {last_user_response or "None yet (first question)"}
 
-        Your response will be spoken aloud. 
-        - Generate a natural, authentic question that flows from the conversation
-        - Be genuine and conversational
-        - Acknowledge what they've shared when it makes sense, but don't force it
-        - Ask about something relevant to their background or what they've mentioned
-        - Avoid repeating questions you've already asked
-        - Keep it natural, not formal or robotic"""
+Your response will be spoken aloud.
+STRUCTURE:
+1. If there was a last answer: start with a brief, genuine acknowledgment (1 sentence, vary phrasing — e.g. "That's really interesting.", "I appreciate you sharing that.", "Good point.", "Nice approach.").
+2. Then bridge naturally into the new topic. Don't say "Moving on to..." — weave it conversationally.
+3. Ask the opening question for this topic. Use the suggested opening as inspiration but make it feel natural, not scripted. Adjust complexity for {seniority} level.
+
+One question only. Keep it conversational."""
+
+            try:
+                response = await self.llm_helper.call_llm_with_instructor(
+                    system_prompt=(
+                        COMMON_SYSTEM_PROMPT +
+                        f" Always respond in English. You are calibrating questions for a {seniority}-level candidate. "
+                        f"Expected depth: {expected_depth}. Acknowledge briefly then transition naturally to the next topic."
+                    ),
+                    user_prompt=prompt,
+                    response_model=QuestionGeneration,
+                    temperature=TEMPERATURE_QUESTION,
+                )
+
+                question_text = response.question.strip()
+                if self._is_duplicate_question(question_text, state):
+                    question_text = next_topic["initial_question"]
+
+                question_record: QuestionRecord = {
+                    "id": str(uuid.uuid4()),
+                    "text": question_text,
+                    "source": "plan",
+                    "resume_anchor": response.resume_anchor,
+                    "aspect": next_topic["category"],
+                    "asked_at_turn": state["turn_count"],
+                    "planned_topic_id": next_topic["id"],
+                }
+
+                # Update plan: mark topic as in_progress
+                updated_plan = update_topic_in_plan(plan, next_topic["id"], {
+                    "coverage_status": COVERAGE_IN_PROGRESS,
+                })
+
+                # Update topics_covered list (simple string tracking, keep for analytics)
+                topics_covered = list(state.get("topics_covered", []))
+                if next_topic["topic"] not in topics_covered:
+                    topics_covered.append(next_topic["topic"])
+
+                return {
+                    "last_node": "question",
+                    "phase": "exploration",
+                    "current_question": question_text,
+                    "next_message": question_text,
+                    "questions_asked": [question_record],
+                    "current_topic_id": next_topic["id"],
+                    "interview_plan": updated_plan,
+                    "topics_covered": topics_covered,
+                }
+
+            except Exception as e:
+                logger.error(f"Plan-driven question generation failed: {e}", exc_info=True)
+                # Fall through to reactive path
+
+        # ── Reactive fallback (no plan or plan exhausted) ─────────────────────
+        topics_covered = state.get("topics_covered", [])
+        questions_asked = [q["text"] for q in state.get("questions_asked", [])[-10:]]
+        topics_info = (
+            f"\nTopics Already Covered: {', '.join(topics_covered)}\nExplore new topics or go deeper."
+            if topics_covered else ""
+        )
+
+        prompt = f"""You are conducting an interview. Generate the next response.
+{name_note}
+{job_context}
+Resume Context: {resume_context}
+{topics_info}
+
+Full Conversation:
+{conversation_context}
+
+Questions Already Asked:
+{chr(10).join(f"- {q}" for q in questions_asked) if questions_asked else "None yet"}
+
+Your response will be spoken aloud.
+STRUCTURE:
+1. If there was a previous answer: acknowledge it briefly (1 sentence, vary phrasing).
+2. Ask a natural question relevant to their background.
+Skip acknowledgment if this is the very first question."""
 
         try:
             response = await self.llm_helper.call_llm_with_instructor(
-                system_prompt=COMMON_SYSTEM_PROMPT + " Generate questions that are genuine, relevant, and flow naturally from the conversation. Acknowledge when it makes sense, but don't force it. Show you're listening through natural conversation.",
+                system_prompt=COMMON_SYSTEM_PROMPT + " Always respond in English. Acknowledge then ask. Be genuine.",
                 user_prompt=prompt,
                 response_model=QuestionGeneration,
                 temperature=TEMPERATURE_QUESTION,
             )
 
             question_text = response.question.strip()
-            resume_anchor = response.resume_anchor
-            aspect = response.aspect
-
             if self._is_duplicate_question(question_text, state):
-                question_text = "Can you tell me more about a challenging project you've worked on?"
-                resume_anchor = None
-                aspect = "challenges"
+                question_text = "Can you tell me about a challenging project you've worked on?"
 
             question_record: QuestionRecord = {
                 "id": str(uuid.uuid4()),
                 "text": question_text,
                 "source": "resume",
-                "resume_anchor": resume_anchor,
-                "aspect": aspect,
+                "resume_anchor": response.resume_anchor,
+                "aspect": response.aspect,
                 "asked_at_turn": state["turn_count"],
+                "planned_topic_id": None,
             }
 
             existing_questions = state.get("questions_asked", [])
-            question_already_asked = any(
-                q.get("text") == question_text
-                for q in existing_questions
-            )
+            already_asked = any(q.get("text") == question_text for q in existing_questions)
 
-            # Track topic if resume_anchor is provided (simplified - just add the anchor as a topic)
-            # NOTE: topics_covered is NOT a reducer field - we manually merge to allow deduplication
-            topics_update = []
-            if resume_anchor and resume_anchor not in topics_covered:
-                topics_update.append(resume_anchor)
-
-            updates = {
+            updates: dict = {
                 "last_node": "question",
                 "phase": "exploration",
                 "current_question": question_text,
                 "next_message": question_text,
             }
-            if not question_already_asked:
+            if not already_asked:
                 updates["questions_asked"] = [question_record]
-            if topics_update:
-                # Manual merge (not using reducer) to allow deduplication logic above
-                current_topics = list(state.get("topics_covered", []))
-                current_topics.extend(topics_update)
+
+            if response.resume_anchor and response.resume_anchor not in topics_covered:
+                current_topics = list(topics_covered)
+                current_topics.append(response.resume_anchor)
                 updates["topics_covered"] = current_topics
 
             return updates
 
         except Exception as e:
-            logger.error(f"Error generating question: {e}", exc_info=True)
+            logger.error(f"Reactive question generation failed: {e}", exc_info=True)
             fallback = "Can you tell me about a challenging project you've worked on?"
             return {
                 "last_node": "question",
@@ -269,32 +344,58 @@ class ActionNodeMixin:
             active_request.get("type") == "clarify"
         )
 
+        # Get seniority-calibrated probe style
+        seniority = state.get("seniority_level", SENIORITY_MID)
+        depth_rules = DEPTH_RULES.get(seniority, DEPTH_RULES[SENIORITY_MID])
+        expected_depth = depth_rules["expected_depth"]
+        probe_style = depth_rules["probe_style"]
+        probe_examples = PROBE_DEPTH_DESCRIPTORS.get(expected_depth, [])
+        probe_hint = (
+            f"Probe examples for {seniority} level: {', '.join(probe_examples[:2])}"
+            if probe_examples else ""
+        )
+
+        # Get current topic context from plan
+        plan = state.get("interview_plan")
+        current_topic_id = state.get("current_topic_id")
+        current_topic = get_topic_by_id(plan, current_topic_id) if plan and current_topic_id else None
+        topic_context = (
+            f"\nCurrent topic: {current_topic['topic']} (category: {current_topic['category']})"
+            if current_topic else ""
+        )
+
         if needs_clarification:
-            prompt = f"""The user asked for clarification on this question: "{last_question}"
+            prompt = f"""The candidate asked for clarification on this question: "{last_question}"
 
-        Your response will be spoken aloud. 
-        - Rephrase the question in a clearer, simpler way
-        - Be natural and conversational
-        - Break it down if needed"""
+        Your response will be spoken aloud.
+        - Briefly acknowledge their confusion (e.g. "Of course, let me rephrase that.")
+        - Rephrase clearly and simply. Break it down if needed."""
         else:
-            prompt = f"""Generate a follow-up question based on the conversation context.
+            prompt = f"""Generate a depth-probe follow-up. The interviewer is pushing deeper on the current topic.
 
-        Previous Question: {last_question}
-        Candidate's Answer: {last_answer}
+        CANDIDATE SENIORITY: {seniority} — probe style: {probe_style}
+        {probe_hint}
+        {topic_context}
 
-        Full Conversation History:
+        Previous Question: "{last_question}"
+        Candidate's Answer: "{last_answer}"
+
+        Full Conversation:
         {build_conversation_context(state, self.interview_logger)}
 
-        Your response will be spoken aloud. 
-        - Generate a natural follow-up that builds on what they just shared
-        - Be authentic and genuine. Ask what you're genuinely curious about
-        - Respond naturally to what they've said
-        - Keep it conversational, not formal"""
+        Your response will be spoken aloud.
+        STRUCTURE:
+        1. Acknowledge the answer briefly (1 sentence, genuine, varied — not "Great!" every time).
+        2. Probe DEEPER with a follow-up calibrated to {seniority} level. For {expected_depth} depth, ask about: {', '.join(probe_examples) if probe_examples else 'specifics, trade-offs, and real examples'}.
+        Keep it conversational. One question only."""
 
         try:
             followup = await self.llm_helper.call_llm_creative(
-                system_prompt=COMMON_SYSTEM_PROMPT +
-                " Generate follow-up questions that build naturally on what the candidate just shared. Respond naturally to their answers without forcing acknowledgments.",
+                system_prompt=(
+                    COMMON_SYSTEM_PROMPT +
+                    f" Always respond in English. You are probing a {seniority}-level candidate. "
+                    f"Probe style: {probe_style}. Acknowledge briefly then push deeper with a targeted follow-up."
+                ),
                 user_prompt=prompt,
             )
             question_record: QuestionRecord = {
@@ -325,6 +426,67 @@ class ActionNodeMixin:
             return {
                 "last_node": "followup",
                 "current_question": fallback,
+                "next_message": fallback,
+            }
+
+    async def answer_candidate_question_node(self, state: InterviewState) -> InterviewState:
+        """Answer a question the candidate asked about the company, role, or process.
+
+        Returns partial state update. Answers directly then transitions back to interview.
+        """
+        candidate_question = state.get("last_response", "")
+        last_interviewer_question = state.get("current_question", "")
+
+        # Extract interviewer persona from conversation history
+        interviewer_name = "the interviewer"
+        company_name = "our company"
+        interviewer_role = "Engineering Manager"
+        conv_history = state.get("conversation_history", [])
+        for msg in conv_history:
+            if msg.get("role") == "assistant":
+                content = msg.get("content", "")
+                # Attempt to extract persona from greeting (e.g. "I'm Sarah, a ... at TechCorp")
+                name_match = re.search(r"I'm ([A-Z][a-z]+)", content)
+                company_match = re.search(r"at ([A-Z][A-Za-z\s]+?)[\.,]", content)
+                role_match = re.search(r"(?:a |an )([A-Za-z\s]+?) at", content)
+                if name_match:
+                    interviewer_name = name_match.group(1)
+                if company_match:
+                    company_name = company_match.group(1).strip()
+                if role_match:
+                    interviewer_role = role_match.group(1).strip()
+                break
+
+        job_context = build_job_context(state)
+
+        prompt = f"""The candidate has asked you a question during the interview. Answer it directly and professionally, then transition back to the interview.
+
+Interviewer persona: {interviewer_name}, {interviewer_role} at {company_name}
+{job_context}
+
+Candidate's question: "{candidate_question}"
+Last interview question you asked (to return to): "{last_interviewer_question}"
+
+Your response will be spoken aloud.
+- Answer the candidate's question clearly and concisely
+- Be honest. If you don't have specific info (e.g. salary), say so briefly
+- After answering, use a natural transition back to the interview (e.g. "Does that help? Now, going back to what I was asking...")
+- Keep the answer brief — 2-4 sentences max before transitioning back"""
+
+        try:
+            answer = await self.llm_helper.call_llm_creative(
+                system_prompt=COMMON_SYSTEM_PROMPT +
+                f" You are {interviewer_name}, a {interviewer_role} at {company_name}. Always respond in English. Answer the candidate's question honestly and transition back to the interview naturally.",
+                user_prompt=prompt,
+            )
+            return {
+                "last_node": "answer_candidate_question",
+                "next_message": answer,
+            }
+        except Exception:
+            fallback = f"That's a good question. {company_name} is a great place to work and I'd be happy to tell you more after the interview. For now, let's continue — {last_interviewer_question}"
+            return {
+                "last_node": "answer_candidate_question",
                 "next_message": fallback,
             }
 
@@ -364,6 +526,28 @@ class ActionNodeMixin:
                     "overall_score": 0.5,
                 },
             }
+
+    async def termination_node(self, state: InterviewState) -> InterviewState:
+        """Immediately terminate the interview due to inappropriate behavior.
+
+        Outputs TERMINATION_MESSAGE verbatim — no LLM call, no variation.
+        Sets phase='terminated' so subsequent turns are short-circuited.
+        """
+        logger.warning(
+            f"Interview {state.get('interview_id')} terminated for inappropriate behavior "
+            f"at turn {state.get('turn_count', 0)}"
+        )
+        return {
+            "last_node": "termination",
+            "phase": "terminated",
+            "next_message": TERMINATION_MESSAGE,
+            "feedback": {
+                **(state.get("feedback") or {}),
+                "terminated": True,
+                "terminated_reason": "inappropriate_behavior",
+                "terminated_at_turn": state.get("turn_count", 0),
+            },
+        }
 
     async def closing_node(self, state: InterviewState) -> InterviewState:
         """Generate closing message.
@@ -480,6 +664,8 @@ class ActionNodeMixin:
                 "last_node": "sandbox_guidance",
                 "next_message": guidance_message,
                 "sandbox": sandbox_update,
+                # Signal to frontend: show the code editor panel NOW
+                "show_code_editor": True,
             }
         except Exception as e:
             logger.error(
@@ -490,27 +676,32 @@ class ActionNodeMixin:
             return {
                 "last_node": "sandbox_guidance",
                 "next_message": fallback,
+                "show_code_editor": True,
             }
 
     async def _should_provide_exercise(self, state: InterviewState) -> bool:
-        """Determine if agent should provide a coding exercise."""
+        """Determine if agent should provide a coding exercise.
+
+        Plan takes precedence: if we generated a plan and it says no coding,
+        we respect that (prevents code editor from popping up for non-tech roles).
+        """
         active_request = state.get("active_user_request")
         if active_request and active_request.get("type") == "write_code":
             return True
 
-        job_desc = state.get("job_description", "").lower(
-        ) if state.get("job_description") else ""
-        coding_keywords = ["python", "javascript", "code",
-                           "programming", "developer", "engineer", "software"]
+        # Respect the interview plan's coding decision
+        plan = state.get("interview_plan")
+        if plan is not None:
+            return plan.get("requires_coding", False)
+
+        # Fallback heuristic (no plan available)
+        job_desc = state.get("job_description", "").lower() if state.get("job_description") else ""
+        coding_keywords = ["python", "javascript", "code", "programming", "developer", "engineer", "software"]
         if job_desc and any(keyword in job_desc for keyword in coding_keywords):
             return True
 
-        conversation = build_conversation_context(
-            state, self.interview_logger)
-        if "technical" in conversation.lower() or "coding" in conversation.lower():
-            return True
-
-        return False
+        conversation = build_conversation_context(state, self.interview_logger)
+        return "technical" in conversation.lower() or "coding" in conversation.lower()
 
     async def _generate_coding_exercise(self, state: InterviewState) -> dict:
         """Generate a coding exercise based on job description and resume."""

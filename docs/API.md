@@ -1,6 +1,6 @@
 # API Reference
 
-Base URL: `https://api.interviewlab.com/api/v1`
+Base URL: `https://api.menntr.com/api/v1`
 
 Authentication: Bearer token in `Authorization` header
 

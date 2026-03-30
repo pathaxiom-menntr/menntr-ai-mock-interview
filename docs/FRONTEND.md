@@ -2,7 +2,7 @@
 
 ## Overview
 
-InterviewLab frontend is a modern Next.js 14 application built with TypeScript, React, and Tailwind CSS. It provides a responsive, accessible interface for conducting voice-based technical interviews.
+Menntr frontend is a modern Next.js 14 application built with TypeScript, React, and Tailwind CSS. It provides a responsive, accessible interface for conducting voice-based technical interviews.
 
 ## Architecture
 

@@ -25,6 +25,8 @@ class Settings(BaseSettings):
 
     # OpenAI
     OPENAI_API_KEY: str
+    AZURE_SPEECH_KEY: str = ""
+    AZURE_SPEECH_REGION: str = ""
     OPENAI_TTS_MODEL: str = "tts-1-hd"  # tts-1 or tts-1-hd (for text-to-speech) - using hd for more natural voice
     OPENAI_TTS_VOICE: str = "alloy"  # alloy, echo, fable, onyx, nova, shimmer
 

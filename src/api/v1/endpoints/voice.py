@@ -5,6 +5,8 @@ from fastapi.responses import Response
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 import base64
+import json
+import time
 
 from src.core.database import get_db
 from src.models.user import User
@@ -92,10 +94,19 @@ async def get_voice_token(
             can_subscribe=request.can_subscribe,
         )
 
+        # #region agent log
+        try:
+            with open(r"c:\Users\Ayush\Desktop\InterviewLab-develop\.cursor\debug.log", "a", encoding="utf-8") as _f:
+                _f.write(json.dumps({"runId": "pre-fix", "hypothesisId": "H1", "location": "src/api/v1/endpoints/voice.py:95", "message": "voice token response values", "data": {"roomName": request.room_name, "returnedUrl": livekit_service.ws_url, "internalUrl": livekit_service.url}, "timestamp": int(time.time() * 1000)}) + "\n")
+        except Exception:
+            pass
+        # #endregion
+
         return VoiceTokenResponse(
             token=token,
             room_name=request.room_name,
-            url=livekit_service.url,
+            # Return browser-facing URL (e.g. ws://localhost:7880 in local Docker).
+            url=livekit_service.ws_url,
         )
 
     except ValueError as e:

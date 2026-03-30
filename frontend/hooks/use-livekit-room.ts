@@ -105,10 +105,16 @@ export function useLiveKitRoom({
 
     try {
       const room = getOrCreateRoom();
+      // #region agent log
+      fetch('http://127.0.0.1:7242/ingest/d253aa31-3b2d-41d7-8c8f-f27a12a33ee7',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({runId:'pre-fix',hypothesisId:'H1-H2',location:'frontend/hooks/use-livekit-room.ts:108',message:'room.connect called',data:{url,tokenLen:token?.length||0,hasRoom:!!roomRef.current},timestamp:Date.now()})}).catch(()=>{});
+      // #endregion
       await room.connect(url, token);
       // State will be updated by Connected event handler
     } catch (err) {
       console.error('❌ LiveKit connection failed', err);
+      // #region agent log
+      fetch('http://127.0.0.1:7242/ingest/d253aa31-3b2d-41d7-8c8f-f27a12a33ee7',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({runId:'pre-fix',hypothesisId:'H2-H3-H4',location:'frontend/hooks/use-livekit-room.ts:113',message:'room.connect failed',data:{url,errorName:(err as Error)?.name,errorMessage:(err as Error)?.message},timestamp:Date.now()})}).catch(()=>{});
+      // #endregion
       const error = err as Error;
       setError(error);
       setState('error');

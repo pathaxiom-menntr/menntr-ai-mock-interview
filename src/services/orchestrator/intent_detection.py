@@ -74,14 +74,23 @@ INTENT TYPES (choose the user's GOAL):
 5. **technical_assessment** - User wants different interview format (coding questions)
    Examples: "Give me coding questions", "I want technical assessment"
 
-6. **stop** - User wants to END the interview
+6. **candidate_question** - User is asking the interviewer a question about the company, role, process, or interviewer
+   Examples: "Which company do you work for?", "What does this role involve?", "How many rounds are there?", "What tech stack do you use?"
+   KEY: The user is seeking information FROM the interviewer, not answering or redirecting
+
+7. **stop** - User wants to END the interview
    Examples: "Let's stop", "That's enough", "I want to end"
 
-7. **continue** - User is AFFIRMING willingness to continue
+8. **continue** - User is AFFIRMING willingness to continue
    Examples: "Yes", "Sure", "Okay", "Go ahead"
 
-8. **no_intent** - User is just ANSWERING normally (default)
-   Examples: Normal responses providing information
+9. **rude_or_inappropriate** - User is being rude, abusive, using sexual language, slurs, or threats
+   Examples: "I want to have sex with you", profanity directed at the interviewer, racist slurs, threats
+   KEY: ANY sexual, abusive, or threatening content aimed at the interviewer or in the session
+   NOT: Mild frustration ("this is annoying") or casual language
+
+10. **no_intent** - User is just ANSWERING normally (default)
+    Examples: Normal responses providing information
 
 DECISION FRAMEWORK:
 1. What is the user's GOAL? (DO something / SAY something / CHANGE something)
@@ -89,10 +98,13 @@ DECISION FRAMEWORK:
 3. Does it require ACTION? (Yes = specific intent / No = no_intent)
 
 EDGE CASES:
-- User asks question back → clarify (if confused) or no_intent (if natural follow-up)
+- User asks question about the interviewer/company/role/process → candidate_question
+- User asks question back out of confusion → clarify
+- User asks natural follow-up as part of their answer → no_intent
 - User mentions code in answer → no_intent (unless explicitly requesting to show/write code)
 - User says "I don't know" → clarify (if confused) or no_intent (if just answering)
-- Multiple intents possible → Choose the one requiring ACTION
+- User says anything sexual, abusive, or threatening → rude_or_inappropriate (ALWAYS, regardless of context)
+- Multiple intents possible → Choose the one requiring ACTION (rude_or_inappropriate takes HIGHEST priority)
 
 EXAMPLES:
 Q: "What challenges did you face?" → A: "Actually, let's talk about leadership" → change_topic (0.95)
@@ -100,6 +112,10 @@ Q: "Tell me about your project" → A: "I'd like to write code to show you" → 
 Q: "How did you solve that?" → A: "What do you mean by 'solve'?" → clarify (0.9)
 Q: "What tools did you use?" → A: "Python, Docker, Kubernetes" → no_intent (0.9)
 Q: "Tell me about microservices" → A: "I built them with Go. Can I show you the code?" → review_code (0.85)
+Q: "What specific challenges did you face?" → A: "Which company do you belong to?" → candidate_question (0.95)
+Q: "Tell me about yourself" → A: "Before I start, what does this role focus on?" → candidate_question (0.9)
+Q: "Tell me about a tough decision" → A: "I want to have sex with you" → rude_or_inappropriate (0.99)
+Q: "Any questions for me?" → A: "[sexual slur or threat]" → rude_or_inappropriate (0.99)
 
 CONFIDENCE:
 - 0.9+: Very clear, explicit request

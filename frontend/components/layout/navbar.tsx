@@ -49,11 +49,11 @@ export function Navbar() {
             <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary">
               <MessageSquare className="h-5 w-5 text-primary-foreground" />
             </div>
-            <span className="text-lg font-semibold">InterviewLab</span>
+            <span className="text-lg font-semibold">Menntr</span>
           </Link>
           <div className="flex items-center space-x-2">
             <Button variant="ghost" size="icon" asChild>
-              <a href="https://github.com/StephaneWamba/InterviewLab" target="_blank" rel="noopener noreferrer" title="GitHub">
+              <a href="https://github.com/StephaneWamba/Menntr" target="_blank" rel="noopener noreferrer" title="GitHub">
                 <Github className="h-5 w-5" />
               </a>
             </Button>
@@ -102,7 +102,7 @@ export function Navbar() {
           <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary">
             <MessageSquare className="h-5 w-5 text-primary-foreground" />
           </div>
-          <span className="text-lg font-semibold">InterviewLab</span>
+          <span className="text-lg font-semibold">Menntr</span>
         </Link>
 
         {/* Navigation */}

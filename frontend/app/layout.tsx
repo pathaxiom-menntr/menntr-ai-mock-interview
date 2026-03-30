@@ -15,11 +15,11 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "InterviewLab - AI-Powered Interview Preparation",
+  title: "Menntr - AI-Powered Interview Preparation",
   description: "Prepare for interviews with AI-powered practice sessions, resume analysis, and live code practice",
   keywords: ["interview", "practice", "AI", "coding", "resume"],
   openGraph: {
-    title: "InterviewLab - AI-Powered Interview Preparation",
+    title: "Menntr - AI-Powered Interview Preparation",
     description: "Prepare for interviews with AI-powered practice sessions, resume analysis, and live code practice",
     type: "website",
     images: [
@@ -27,13 +27,13 @@ export const metadata: Metadata = {
         url: "/opengraph-image",
         width: 1200,
         height: 630,
-        alt: "InterviewLab - AI-Powered Interview Preparation",
+        alt: "Menntr - AI-Powered Interview Preparation",
       },
     ],
   },
   twitter: {
     card: "summary_large_image",
-    title: "InterviewLab - AI-Powered Interview Preparation",
+    title: "Menntr - AI-Powered Interview Preparation",
     description: "Prepare for interviews with AI-powered practice sessions, resume analysis, and live code practice",
     images: ["/opengraph-image"],
   },

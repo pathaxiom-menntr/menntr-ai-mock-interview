@@ -17,7 +17,7 @@
 
 ```bash
 git clone <repository-url>
-cd InterviewLab
+cd Menntr
 ```
 
 ### 2. Backend Setup

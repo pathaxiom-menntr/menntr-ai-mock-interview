@@ -195,6 +195,6 @@ The orchestrator manages flow through phases: intro (greeting), exploration (res
 **Need help?**
 
 - Check [FAQ](#) (coming soon)
-- Email: support@interviewlab.com
+- Email: support@menntr.com
 - Discord: [Join community](#)
 

@@ -1,6 +1,6 @@
-# InterviewLab Frontend
+# Menntr Frontend
 
-Modern, performant Next.js frontend for InterviewLab.
+Modern, performant Next.js frontend for Menntr.
 
 ## Features
 

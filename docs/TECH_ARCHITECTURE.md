@@ -1,4 +1,4 @@
-# InterviewLab — Technical Architecture & Design Document
+# Menntr — Technical Architecture & Design Document
 
 > A comprehensive breakdown of every technology, strategy, and technique used in the platform — what it is, where it is used, and exactly why it was chosen.
 
@@ -28,7 +28,7 @@
 
 ## 1. System Overview
 
-InterviewLab is an AI-powered mock interview platform that conducts fully autonomous, real-time voice interviews with candidates. A candidate uploads their resume, describes the target job, and joins a voice room where an AI interviewer:
+Menntr is an AI-powered mock interview platform that conducts fully autonomous, real-time voice interviews with candidates. A candidate uploads their resume, describes the target job, and joins a voice room where an AI interviewer:
 
 - Greets them by name
 - Asks relevant technical and behavioural questions based on their resume
@@ -654,9 +654,9 @@ This structured data is then stored in `resumes.extracted_data` (JSON column) an
 
 Retrieval-Augmented Generation (RAG) embeds documents into a vector database and retrieves relevant chunks at query time using semantic similarity search.
 
-### Why InterviewLab Does NOT Use RAG
+### Why Menntr Does NOT Use RAG
 
-| Criteria | RAG | InterviewLab Approach |
+| Criteria | RAG | Menntr Approach |
 |---------|-----|----------------------|
 | Data source | Large external corpus | Single candidate resume (~1-2 pages) |
 | Data size | Too large for context window | Fits entirely in context window |

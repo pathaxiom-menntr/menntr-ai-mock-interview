@@ -118,6 +118,14 @@ def interview_to_state(interview: Interview, user: Optional["User"] = None) -> "
             f"Filtered out {filtered_count} potentially contaminated messages from interview {interview.id}"
         )
 
+    # Restore persisted plan fields stored inside resume_context
+    resume_ctx = interview.resume_context or {}
+    persisted_plan = resume_ctx.get("_interview_plan")
+    persisted_topic_iterations = resume_ctx.get("_topic_iterations", {})
+    persisted_seniority = resume_ctx.get("_seniority_level")
+    persisted_current_topic_id = resume_ctx.get("_current_topic_id")
+    persisted_show_code_editor = resume_ctx.get("_show_code_editor", False)
+
     state: "InterviewState" = {
         "interview_id": interview.id,
         "user_id": interview.user_id,
@@ -129,7 +137,6 @@ def interview_to_state(interview: Interview, user: Optional["User"] = None) -> "
         "turn_count": interview.turn_count,
         "questions_asked": questions_asked,
         "current_question": None,
-        "resume_exploration": resume_exploration,
         "detected_intents": [],
         "active_user_request": None,
         "sandbox": {
@@ -156,6 +163,14 @@ def interview_to_state(interview: Interview, user: Optional["User"] = None) -> "
         "code_quality": None,
         "code_submissions": code_submissions,
         "feedback": interview.feedback,
+        "topics_covered": [],
+        "conversation_summary": "No conversation yet.",
+        # Plan fields — restored from persisted storage in resume_context
+        "interview_plan": persisted_plan,
+        "current_topic_id": persisted_current_topic_id,
+        "topic_iterations": persisted_topic_iterations,
+        "seniority_level": persisted_seniority,
+        "show_code_editor": persisted_show_code_editor,
     }
 
     return state
@@ -200,8 +215,20 @@ def state_to_interview(state: "InterviewState", interview: Interview) -> None:
     if state.get("resume_structured"):
         resume_context = state["resume_structured"].copy() if isinstance(
             state["resume_structured"], dict) else {}
+        # Persist sandbox state
         if "sandbox" in state and state["sandbox"]:
             resume_context["_sandbox"] = state["sandbox"]
+        # Persist plan state (survives reconnects)
+        if state.get("interview_plan") is not None:
+            resume_context["_interview_plan"] = state["interview_plan"]
+        if state.get("topic_iterations") is not None:
+            resume_context["_topic_iterations"] = state["topic_iterations"]
+        if state.get("seniority_level") is not None:
+            resume_context["_seniority_level"] = state["seniority_level"]
+        if state.get("current_topic_id") is not None:
+            resume_context["_current_topic_id"] = state["current_topic_id"]
+        if state.get("show_code_editor") is not None:
+            resume_context["_show_code_editor"] = state["show_code_editor"]
         interview.resume_context = resume_context
 
     if "job_description" in state:

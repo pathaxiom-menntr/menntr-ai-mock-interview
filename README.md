@@ -1,4 +1,4 @@
-# InterviewLab
+# Menntr
 
 <div align="center">
   <img src="frontend/public/landing-page.png" alt="Landing Page" width="100%"/>
@@ -10,7 +10,7 @@
 
 **Problem:** Traditional technical interview practice often lacks realism, immediate feedback, and interactive voice-based engagement.
 
-**Solution:** InterviewLab delivers AI-driven technical interviews using real-time voice conversations, live code execution, and in-depth feedback, powered by LangGraph and LiveKit.
+**Solution:** Menntr delivers AI-driven technical interviews using real-time voice conversations, live code execution, and in-depth feedback, powered by LangGraph and LiveKit.
 
 ---
 
@@ -136,7 +136,7 @@ sequenceDiagram
 ## Project Structure
 
 ```
-InterviewLab/
+Menntr/
 ├── src/                    # Backend (Python/FastAPI)
 │   ├── agents/            # LiveKit agent logic
 │   ├── api/               # REST API implementation
@@ -171,7 +171,7 @@ InterviewLab/
 - [API Reference](docs/API.md) - REST API endpoints
 - [Frontend](docs/FRONTEND.md) - Next.js frontend architecture and development
 - [Voice Infrastructure](docs/VOICE_INFRASTRUCTURE.md) - LiveKit setup and agent architecture
-- [User Guide](docs/USER_GUIDE.md) - How to use InterviewLab
+- [User Guide](docs/USER_GUIDE.md) - How to use Menntr
 - [Local Development](docs/LOCAL_DEVELOPMENT.md) - Setup and development workflow
 - [LangGraph Guide](docs/LANGGRAPH.md) - State, nodes, and orchestration
 - [Deployment](docs/DEPLOYMENT.md) - Railway and Vercel deployment

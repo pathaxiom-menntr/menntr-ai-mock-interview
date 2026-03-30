@@ -2,7 +2,7 @@
 
 ## Overview
 
-InterviewLab uses **LangGraph** to manage interview state and flow. LangGraph provides:
+Menntr uses **LangGraph** to manage interview state and flow. LangGraph provides:
 
 - **Explicit state machine** with nodes and edges
 - **Reducers** for append-only fields (prevents race conditions)

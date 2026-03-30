@@ -55,7 +55,7 @@ export default function RegisterPage() {
           </div>
           <CardTitle className="text-2xl font-bold">Create an account</CardTitle>
           <CardDescription>
-            Get started with InterviewLab today
+            Get started with Menntr today
           </CardDescription>
         </CardHeader>
         <form onSubmit={handleSubmit}>

@@ -2,7 +2,7 @@
 
 ## Overview
 
-This document outlines how InterviewLab manages non-functional requirements (NFRs) - the quality attributes that define how the system performs, scales, and maintains reliability.
+This document outlines how Menntr manages non-functional requirements (NFRs) - the quality attributes that define how the system performs, scales, and maintains reliability.
 
 ## NFR Categories
 
@@ -159,7 +159,7 @@ except Exception as e:
 ```python
 @app.get("/health")
 async def health_check():
-    return {"status": "healthy", "service": "interviewlab"}
+    return {"status": "healthy", "service": "menntr"}
 ```
 
 ## Security

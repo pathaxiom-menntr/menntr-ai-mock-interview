@@ -2,7 +2,7 @@
 
 ## Overview
 
-This guide explains how to deploy InterviewLab to Railway with multiple services:
+This guide explains how to deploy Menntr to Railway with multiple services:
 
 - **API Service**: FastAPI backend
 - **Agent Service**: LiveKit agent (optional, can run separately)

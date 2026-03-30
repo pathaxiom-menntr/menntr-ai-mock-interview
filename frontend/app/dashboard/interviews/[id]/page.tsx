@@ -70,6 +70,9 @@ export default function InterviewDetailPage() {
     token: voiceToken?.token || null,
     url: voiceToken?.url || null,
     onConnected: async (room) => {
+      // #region agent log
+      fetch('http://127.0.0.1:7242/ingest/d253aa31-3b2d-41d7-8c8f-f27a12a33ee7',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({runId:'pre-fix',hypothesisId:'H4',location:'frontend/app/dashboard/interviews/[id]/page.tsx:73',message:'room connected callback',data:{interviewId,participantCount:room.remoteParticipants.size},timestamp:Date.now()})}).catch(()=>{});
+      // #endregion
       // Reset agent ready state when connecting to new room
       setAgentReady(false);
       
@@ -185,6 +188,9 @@ export default function InterviewDetailPage() {
     },
     onDisconnected: (reason) => {
       console.warn('Room disconnected:', reason);
+      // #region agent log
+      fetch('http://127.0.0.1:7242/ingest/d253aa31-3b2d-41d7-8c8f-f27a12a33ee7',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({runId:'pre-fix',hypothesisId:'H3-H4',location:'frontend/app/dashboard/interviews/[id]/page.tsx:188',message:'room disconnected callback',data:{interviewId,reason:String(reason||'unknown')},timestamp:Date.now()})}).catch(()=>{});
+      // #endregion
       toast.warning('Room disconnected. Click reconnect to continue.');
     },
     onError: (error) => {
@@ -227,6 +233,9 @@ export default function InterviewDetailPage() {
       return response;
     },
     onSuccess: (data) => {
+      // #region agent log
+      fetch('http://127.0.0.1:7242/ingest/d253aa31-3b2d-41d7-8c8f-f27a12a33ee7',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({runId:'pre-fix',hypothesisId:'H1-H2',location:'frontend/app/dashboard/interviews/[id]/page.tsx:230',message:'voice token received',data:{interviewId,url:data?.url,tokenLen:data?.token?.length||0},timestamp:Date.now()})}).catch(()=>{});
+      // #endregion
       setVoiceToken({ token: data.token, url: data.url });
       setShowVoiceVideo(true);
       toast.success('Voice token obtained. Connecting to room...');
@@ -578,8 +587,8 @@ export default function InterviewDetailPage() {
           </Tabs>
         ) : (
           <>
-            {/* Left Side - 1/3 width (Video Area + Transcription) */}
-            <div className="w-1/3 border-r border-border flex flex-col">
+            {/* Left Side - expands to full width when code editor is hidden */}
+            <div className={`${interview.show_code_editor ? 'w-1/3 border-r border-border' : 'w-full'} flex min-h-0 flex-1 flex-col overflow-hidden`}>
               {/* Connection Status Banner */}
               {showVoiceVideo && roomState === 'disconnected' && (
                 <div className="bg-destructive/10 border-b border-destructive/20 px-4 py-3 flex items-center justify-between">
@@ -628,27 +637,30 @@ export default function InterviewDetailPage() {
               
               {canRespond && showVoiceVideo && voiceToken ? (
             <>
-              {/* Top Row: Participant Video | Interviewer Avatar side by side */}
-              <div className="h-64 p-4 grid grid-cols-2 gap-4">
-                {/* Left Column: Participant Video */}
-                <ParticipantVideo 
-                  room={roomInstance} 
-                  userName={user?.full_name || 'You'}
-                />
-                
-                {/* Right Column: Interviewer Avatar with Waves */}
-                <AvatarWithWaves room={roomInstance} />
-              </div>
-              
-              {/* Room Controls (Mute/Video) - Only show when connected */}
-              {isConnected && (
-                <div className="px-4 pb-2">
-                  <RoomControls room={roomInstance} />
+              {/* Video row: fixed height so transcript scroll area does not overlap */}
+              <div className="grid h-[clamp(220px,38vh,380px)] shrink-0 grid-cols-2 gap-4 p-4 pb-3">
+                {/* Local video + floating mic/camera (always visible on top of tile) */}
+                <div className="relative h-full min-h-0 overflow-hidden rounded-xl">
+                  <ParticipantVideo
+                    room={roomInstance}
+                    userName={user?.full_name || 'You'}
+                  />
+                  {roomInstance && (
+                    <div className="pointer-events-none absolute inset-x-0 bottom-3 z-20 flex justify-center">
+                      <div className="pointer-events-auto rounded-full border border-white/20 bg-black/65 px-2 py-1.5 shadow-xl backdrop-blur-md">
+                        <RoomControls room={roomInstance} variant="floating" />
+                      </div>
+                    </div>
+                  )}
                 </div>
-              )}
-              
-              {/* Bottom: Real-time Transcription */}
-              <div className="flex-1 min-h-0 p-4 pt-0">
+
+                <div className="h-full min-h-0 min-w-0 overflow-hidden rounded-xl">
+                  <AvatarWithWaves room={roomInstance} />
+                </div>
+              </div>
+
+              {/* Transcript: fills remaining height, scrolls internally */}
+              <div className="flex min-h-0 flex-1 flex-col overflow-hidden border-t border-border px-4 pb-4 pt-2">
                 <TranscriptionDisplay room={roomInstance} />
               </div>
             </>
@@ -706,22 +718,12 @@ export default function InterviewDetailPage() {
               )}
             </div>
 
-            {/* Right Side - 2/3 width (Sandbox) */}
-            <div className="w-2/3 min-w-0 p-4">
-              {canRespond ? (
+            {/* Right Side - Code Editor (only visible when agent signals show_code_editor=true) */}
+            {interview.show_code_editor && (
+              <div className="w-2/3 min-w-0 p-4">
                 <CodeSandbox interviewId={interviewId} />
-              ) : (
-                <div className="h-full flex items-center justify-center">
-                  <Card>
-                    <CardContent className="py-12 text-center">
-                      <p className="text-muted-foreground">
-                        Start the interview to access the code editor
-                      </p>
-                    </CardContent>
-                  </Card>
-                </div>
-              )}
-            </div>
+              </div>
+            )}
           </>
         )}
       </div>

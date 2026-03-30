@@ -755,6 +755,13 @@ def _interview_to_response(interview: Interview, state: dict | None = None) -> I
         # Fallback: check if sandbox was stored in resume_context (temporary)
         sandbox_state = interview.resume_context.get("_sandbox")
 
+    # Read show_code_editor from state if available, else from persisted resume_context
+    show_code_editor = False
+    if state:
+        show_code_editor = bool(state.get("show_code_editor", False))
+    elif interview.resume_context and isinstance(interview.resume_context, dict):
+        show_code_editor = bool(interview.resume_context.get("_show_code_editor", False))
+
     return InterviewResponse(
         id=interview.id,
         user_id=interview.user_id,
@@ -767,6 +774,7 @@ def _interview_to_response(interview: Interview, state: dict | None = None) -> I
         turn_count=interview.turn_count,
         current_message=current_message,
         sandbox=sandbox_state,
+        show_code_editor=show_code_editor,
         started_at=interview.started_at.isoformat() if interview.started_at else None,
         completed_at=interview.completed_at.isoformat() if interview.completed_at else None,
         created_at=interview.created_at.isoformat(),

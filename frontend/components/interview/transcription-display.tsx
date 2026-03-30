@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState, useRef } from 'react';
-import { Room, RoomEvent, TranscriptionSegment, ParticipantEvent } from 'livekit-client';
+import { Room } from 'livekit-client';
 import { Card, CardContent } from '@/components/ui/card';
 import { User, UserCheck } from 'lucide-react';
 
@@ -46,48 +46,82 @@ export function TranscriptionDisplay({ room }: TranscriptionDisplayProps) {
           transcribedTrackId,
         });
 
-        // Normalize speaker name - replace agent/AI references with "Interviewer"
-        let speakerName = participantInfo?.name || 
-                          participantInfo?.identity || 
-                          'Unknown';
-        
-        // Replace agent/AI references with "Interviewer"
-        if (speakerName.toLowerCase().includes('agent') || 
-            speakerName.toLowerCase().includes('ai') ||
-            speakerName.toLowerCase().includes('interviewer')) {
+        // Normalize speaker so local STT segments share one key (merge consecutive bubbles)
+        const lp = room.localParticipant;
+        const pid = participantInfo?.identity ?? '';
+        const pname = participantInfo?.name ?? '';
+        const isLocalSpeaker =
+          !!lp &&
+          (pid === lp.identity ||
+            pid === lp.name ||
+            pname === lp.name ||
+            pname === lp.identity ||
+            (pid && lp.identity && pid.toLowerCase() === lp.identity.toLowerCase()));
+
+        let speakerName = participantInfo?.name || participantInfo?.identity || 'Unknown';
+        if (isLocalSpeaker) {
+          speakerName = lp!.name || lp!.identity || 'You';
+        } else if (
+          speakerName.toLowerCase().includes('agent') ||
+          speakerName.toLowerCase().includes('ai') ||
+          speakerName.toLowerCase().includes('interviewer')
+        ) {
           speakerName = 'Interviewer';
         }
-        
+
         setMessages((prev) => {
-          const newMessages = [...prev];
-          
+          let newMessages = [...prev];
+
           if (isFinal) {
-            // Add final transcription with unique ID
-            // Use segmentId + timestamp + speaker + counter to ensure uniqueness
-            const uniqueId = `${segmentId || 'final'}-${speakerName}-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
-            newMessages.push({
-              id: uniqueId,
-              text: fullText,
-              speaker: speakerName,
-              timestamp: new Date(),
-              isFinal: true,
-            });
-          } else {
-            // Update or add interim transcription
-            const existingIndex = newMessages.findIndex(
-              (m) => !m.isFinal && m.speaker === speakerName && segmentId && m.id.startsWith(`${segmentId}-${speakerName}`)
+            // Drop interim bubble for this speaker when final arrives
+            newMessages = newMessages.filter(
+              (m) => !(m.speaker === speakerName && !m.isFinal)
             );
-            
+
+            const last = newMessages[newMessages.length - 1];
+            const chunk = typeof fullText === 'string' ? fullText.trim() : String(fullText).trim();
+            if (!chunk) {
+              return newMessages.slice(-100);
+            }
+
+            const canMerge =
+              last &&
+              last.isFinal &&
+              last.speaker === speakerName;
+
+            if (canMerge) {
+              const prevText = last.text.trim();
+              newMessages[newMessages.length - 1] = {
+                ...last,
+                text: [prevText, chunk].filter(Boolean).join(' '),
+                timestamp: new Date(),
+              };
+            } else {
+              const uniqueId = `${segmentId || 'final'}-${speakerName}-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+              newMessages.push({
+                id: uniqueId,
+                text: chunk,
+                speaker: speakerName,
+                timestamp: new Date(),
+                isFinal: true,
+              });
+            }
+          } else {
+            // One interim row per speaker (avoids stacked "typing..." duplicates)
+            const interimKey = `interim-${speakerName}`;
+            const existingIndex = newMessages.findIndex(
+              (m) => !m.isFinal && m.speaker === speakerName
+            );
             if (existingIndex >= 0) {
               newMessages[existingIndex] = {
                 ...newMessages[existingIndex],
+                id: interimKey,
                 text: fullText,
+                timestamp: new Date(),
               };
             } else {
-              // Create unique ID for interim messages
-              const uniqueId = `${segmentId || 'interim'}-${speakerName}-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
               newMessages.push({
-                id: uniqueId,
+                id: interimKey,
                 text: fullText,
                 speaker: speakerName,
                 timestamp: new Date(),
@@ -95,8 +129,7 @@ export function TranscriptionDisplay({ room }: TranscriptionDisplayProps) {
               });
             }
           }
-          
-          // Keep only last 100 messages
+
           return newMessages.slice(-100);
         });
       } catch (error) {
@@ -130,12 +163,15 @@ export function TranscriptionDisplay({ room }: TranscriptionDisplayProps) {
   }, [messages]);
 
   return (
-    <Card className="h-full flex flex-col">
-      <CardContent className="flex-1 p-4 flex flex-col min-h-0">
-        <h3 className="text-sm font-semibold mb-3">Conversation</h3>
-        <div className="flex-1 overflow-y-auto space-y-2 pr-4" ref={scrollAreaRef}>
+    <Card className="flex h-full min-h-0 flex-1 flex-col overflow-hidden border-0 shadow-none">
+      <CardContent className="flex min-h-0 flex-1 flex-col gap-0 p-0">
+        <h3 className="shrink-0 px-1 pb-2 text-sm font-semibold">Conversation</h3>
+        <div
+          className="min-h-0 flex-1 flex flex-col gap-4 overflow-y-auto overflow-x-hidden pr-1 pb-1"
+          ref={scrollAreaRef}
+        >
           {messages.length === 0 ? (
-            <p className="text-sm text-muted-foreground text-center py-4">
+            <p className="py-6 text-center text-sm text-muted-foreground">
               Waiting for conversation to start...
             </p>
           ) : (
@@ -152,15 +188,15 @@ export function TranscriptionDisplay({ room }: TranscriptionDisplayProps) {
               return (
                 <div
                   key={message.id}
-                  className={`flex items-start gap-2 p-2 rounded-lg ${
+                  className={`flex shrink-0 items-start gap-3 rounded-lg border px-3 py-3 ${
                     isInterviewer 
-                      ? 'bg-primary/5 border-l-2 border-primary' 
+                      ? 'border-primary/20 bg-primary/5' 
                       : isUser
-                      ? 'bg-muted/50 border-l-2 border-muted-foreground'
-                      : 'bg-background'
-                  } ${!message.isFinal ? 'opacity-60' : ''}`}
+                      ? 'border-muted bg-muted/40'
+                      : 'border-border bg-background'
+                  } ${!message.isFinal ? 'opacity-80' : ''}`}
                 >
-                  <div className={`flex-shrink-0 mt-0.5 ${
+                  <div className={`mt-0.5 shrink-0 ${
                     isInterviewer ? 'text-primary' : 'text-muted-foreground'
                   }`}>
                     {isInterviewer ? (
@@ -169,23 +205,23 @@ export function TranscriptionDisplay({ room }: TranscriptionDisplayProps) {
                       <User className="h-4 w-4" />
                     )}
                   </div>
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2 mb-1">
-                      <span className={`font-semibold text-xs ${
+                  <div className="min-w-0 flex-1">
+                    <div className="mb-1 flex flex-wrap items-center gap-x-2 gap-y-0.5">
+                      <span className={`text-xs font-semibold ${
                         isInterviewer ? 'text-primary' : 'text-foreground'
                       }`}>
                         {displayName}
                       </span>
                       {!message.isFinal && (
-                        <span className="text-xs text-muted-foreground italic">(typing...)</span>
+                        <span className="text-xs italic text-muted-foreground">(typing…)</span>
                       )}
                     </div>
-                    <p className={`text-sm ${
-                      isInterviewer ? 'text-foreground' : 'text-foreground'
-                    } ${!message.isFinal ? 'italic' : ''}`}>
+                    <p className={`break-words text-sm leading-relaxed ${
+                      !message.isFinal ? 'italic' : ''
+                    }`}>
                       {message.text}
                     </p>
-                    <p className="text-xs text-muted-foreground mt-1">
+                    <p className="mt-1.5 text-xs text-muted-foreground">
                       {message.timestamp.toLocaleTimeString()}
                     </p>
                   </div>

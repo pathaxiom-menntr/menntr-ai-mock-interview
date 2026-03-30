@@ -18,7 +18,10 @@ class LiveKitService:
 
         self.api_key = settings.LIVEKIT_API_KEY
         self.api_secret = settings.LIVEKIT_API_SECRET
+        # Internal URL is used by backend/agent containers to call LiveKit APIs.
         self.url = settings.LIVEKIT_URL or "wss://interviewlab-livekit.livekit.cloud"
+        # Public WS URL is returned to browser clients for room connection.
+        self.ws_url = settings.LIVEKIT_WS_URL or self.url
 
     def create_access_token(
         self,

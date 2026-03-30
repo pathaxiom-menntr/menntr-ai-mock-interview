@@ -1,8 +1,8 @@
-# InterviewLab Architecture
+# Menntr Architecture
 
 ## System Overview
 
-InterviewLab is a voice-based technical interview platform using LangGraph for orchestration and LiveKit for real-time communication.
+Menntr is a voice-based technical interview platform using LangGraph for orchestration and LiveKit for real-time communication.
 
 The system connects a Next.js frontend to a FastAPI backend, which coordinates with LiveKit for real-time voice communication. The LiveKit agent bridges voice streams to the LangGraph orchestrator, which manages interview state and generates responses using GPT-4o-mini.
 

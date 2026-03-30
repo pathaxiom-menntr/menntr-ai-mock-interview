@@ -99,7 +99,7 @@ export function ParticipantVideo({ room, userName = 'You' }: ParticipantVideoPro
             <p className="text-muted-foreground text-sm">No video</p>
           </div>
         )}
-        <div className="absolute bottom-2 left-2 bg-black/50 text-white px-2 py-1 rounded text-xs z-10">
+        <div className="absolute left-2 top-2 z-10 rounded bg-black/55 px-2 py-1 text-xs text-white">
           {userName}
         </div>
       </CardContent>

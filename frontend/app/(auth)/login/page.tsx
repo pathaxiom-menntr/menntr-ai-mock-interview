@@ -41,7 +41,7 @@ export default function LoginPage() {
           </div>
           <CardTitle className="text-2xl font-bold">Welcome back</CardTitle>
           <CardDescription>
-            Sign in to your InterviewLab account
+            Sign in to your Menntr account
           </CardDescription>
         </CardHeader>
         <form onSubmit={handleSubmit}>

@@ -1,6 +1,6 @@
 {
-  "name": "InterviewLab",
-  "short_name": "InterviewLab",
+  "name": "Menntr",
+  "short_name": "Menntr",
   "description": "AI-Powered Interview Preparation Platform",
   "start_url": "/",
   "display": "standalone",
