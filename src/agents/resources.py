@@ -96,7 +96,7 @@ async def bootstrap_resources(ctx: JobContext, interview_id: int) -> AgentResour
         # Defer heavy imports until after LiveKit handshake completes
         from src.core.database import AsyncSessionLocal
         from src.core.config import settings
-        from livekit.plugins import openai
+        import livekit.plugins.azure as azure
         from src.agents.orchestrator_llm import OrchestratorLLM
 
         # Initialize database session from connection pool
@@ -109,19 +109,15 @@ async def bootstrap_resources(ctx: JobContext, interview_id: int) -> AgentResour
 
         # Initialize TTS with graceful error handling
         try:
-            resources.tts = openai.TTS(
-                voice=settings.OPENAI_TTS_VOICE or "alloy",
-                model=settings.OPENAI_TTS_MODEL or "tts-1-hd"
-            )
+            resources.tts = azure.TTS()
         except Exception as e:
             logger.exception("TTS creation failed, will retry later")
             resources.tts = None
 
         # Initialize STT with graceful error handling
-        # language="en" forces English-only transcription to prevent Whisper
-        # from auto-detecting and transcribing non-English speech in other scripts
+        # language="en" forces English-only transcription
         try:
-            resources.stt = openai.STT(language="en")
+            resources.stt = azure.STT(language="en-US")
         except Exception as e:
             logger.exception("STT creation failed, will retry later")
             resources.stt = None

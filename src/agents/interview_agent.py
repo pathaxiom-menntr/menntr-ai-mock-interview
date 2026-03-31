@@ -31,7 +31,7 @@ from livekit.agents import (
 # Plugins MUST be imported at module level (main thread) before any job subprocess runs.
 # LiveKit Agents v1.x enforces: Plugin.register_plugin() raises RuntimeError if called
 # from a non-main thread, which happens when imports are deferred into async entrypoints.
-from livekit.plugins import openai as _openai_plugin  # noqa: F401
+import livekit.plugins.azure as _azure_plugin  # noqa: F401
 from livekit.plugins import silero as _silero_plugin  # noqa: F401
 
 # Type hints are conditionally imported to avoid runtime overhead

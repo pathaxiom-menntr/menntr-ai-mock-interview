@@ -36,6 +36,8 @@ RUN uv pip install --system --no-cache \
     python-dotenv>=1.0.0 \
     livekit>=0.11.0 \
     livekit-agents>=0.7.0 \
+    livekit-plugins-silero>=1.5.1 \
+    livekit-plugins-azure>=0.3.0 \
     docker>=6.1.0
 
 # Stage 2: Runtime

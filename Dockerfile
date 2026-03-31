@@ -38,6 +38,7 @@ RUN uv pip install --system --no-cache \
     livekit-agents[codecs]>=1.5.1 \
     livekit-plugins-openai>=1.5.1 \
     livekit-plugins-silero>=1.5.1 \
+    livekit-plugins-azure>=0.3.0 \
     docker>=6.1.0
 
 # Stage 2: Runtime
