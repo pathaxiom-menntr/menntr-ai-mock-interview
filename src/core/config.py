@@ -23,8 +23,12 @@ class Settings(BaseSettings):
     ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
 
-    # OpenAI
-    OPENAI_API_KEY: str
+    # Azure OpenAI (Primary LLM)
+    AZURE_OPENAI_API_KEY: str
+    AZURE_OPENAI_ENDPOINT: str
+    AZURE_OPENAI_API_VERSION: str = "2024-08-01-preview"
+    AZURE_OPENAI_DEPLOYMENT_NAME: str = "AZURE_OPENAI_API-4.1"
+    
     AZURE_SPEECH_KEY: str = ""
     AZURE_SPEECH_REGION: str = ""
     OPENAI_TTS_MODEL: str = "tts-1-hd"  # tts-1 or tts-1-hd (for text-to-speech) - using hd for more natural voice
@@ -51,6 +55,15 @@ class Settings(BaseSettings):
         case_sensitive=True,
         extra="ignore",  # Ignore extra environment variables
     )
+
+    def get_azure_openai_client(self):
+        """Get an AsyncAzureOpenAI client."""
+        from openai import AsyncAzureOpenAI
+        return AsyncAzureOpenAI(
+            api_key=self.AZURE_OPENAI_API_KEY,
+            azure_endpoint=self.AZURE_OPENAI_ENDPOINT,
+            api_version=self.AZURE_OPENAI_API_VERSION,
+        )
 
 
 settings = Settings()

@@ -44,7 +44,9 @@ STANDARD_TRANSITION = "Does that help? Now, going back to what I was asking"
 # LLM CONFIGURATION
 # ============================================================================
 
-DEFAULT_MODEL = "gpt-4o-mini"
+from src.core.config import settings
+
+DEFAULT_MODEL = settings.AZURE_OPENAI_DEPLOYMENT_NAME
 TEMPERATURE_CREATIVE = 0.8       # Greetings, conversational responses
 TEMPERATURE_BALANCED = 0.7       # Decisions, persona generation
 TEMPERATURE_ANALYTICAL = 0.3     # Analysis, plan generation, scoring

@@ -98,7 +98,7 @@ class FeedbackGenerator:
 
     def _get_openai_client(self):
         if self._openai_client is None:
-            client = AsyncOpenAI(api_key=settings.OPENAI_API_KEY)
+            client = settings.get_azure_openai_client()
             self._openai_client = instructor.patch(client)
         return self._openai_client
 
@@ -216,7 +216,7 @@ Be specific and reference actual examples from the conversation."""
 
         try:
             result = await client.chat.completions.create(
-                model="gpt-4o-mini",
+                model=settings.AZURE_OPENAI_DEPLOYMENT_NAME,
                 response_model=InterviewFeedback,
                 messages=[
                     {

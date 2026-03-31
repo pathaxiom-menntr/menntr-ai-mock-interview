@@ -641,7 +641,7 @@ Your response will be spoken aloud.
 
             if self.interview_logger:
                 self.interview_logger.log_llm_call(
-                    "sandbox_guidance", prompt, guidance_message, "gpt-4o-mini"
+                    "sandbox_guidance", prompt, guidance_message, DEFAULT_MODEL
                 )
 
             sandbox = state.get("sandbox", {})

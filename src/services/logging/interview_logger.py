@@ -65,8 +65,10 @@ class InterviewLogger:
             "reasoning": reasoning
         })
 
-    def log_llm_call(self, node_name: str, prompt: str, response: Any, model: str = "gpt-4o-mini"):
+    def log_llm_call(self, node_name: str, prompt: str, response: Any, model: str = ""):
         """Log LLM API calls."""
+        from src.services.orchestrator.constants import DEFAULT_MODEL
+        model = model or DEFAULT_MODEL
         self._write_log("INFO", f"LLM_CALL_{node_name}", {
             "model": model,
             "prompt": prompt[:1000],

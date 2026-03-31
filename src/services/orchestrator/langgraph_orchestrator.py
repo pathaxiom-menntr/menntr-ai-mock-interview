@@ -53,7 +53,7 @@ class LangGraphInterviewOrchestrator:
 
     def _get_openai_client(self):
         if self._openai_client is None:
-            client = AsyncOpenAI(api_key=settings.OPENAI_API_KEY)
+            client = settings.get_azure_openai_client()
             self._openai_client = instructor.patch(client)
         return self._openai_client
 

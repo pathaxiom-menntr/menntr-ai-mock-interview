@@ -12,10 +12,10 @@ class TTSService:
     def __init__(self):
         self._client = None
 
-    def _get_client(self) -> AsyncOpenAI:
-        """Get or create OpenAI client."""
+    def _get_client(self):
+        """Get or create Azure OpenAI client."""
         if self._client is None:
-            self._client = AsyncOpenAI(api_key=settings.OPENAI_API_KEY)
+            self._client = settings.get_azure_openai_client()
         return self._client
 
     async def text_to_speech(

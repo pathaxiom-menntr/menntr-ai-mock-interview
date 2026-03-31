@@ -44,7 +44,7 @@ class LLMHelper:
         Args:
             system_prompt: System message content
             user_prompt: User message content
-            model: Model name (default: gpt-4o-mini)
+            model: Model name (default: from constants)
             temperature: Temperature setting
             response_format: Optional response format (e.g., {"type": "json_object"})
 
@@ -81,7 +81,7 @@ class LLMHelper:
             system_prompt: System message content
             user_prompt: User message content
             response_model: Pydantic model for structured output
-            model: Model name (default: gpt-4o-mini)
+            model: Model name (default: from constants)
             temperature: Temperature setting
 
         Returns:
